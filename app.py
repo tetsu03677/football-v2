@@ -1,257 +1,239 @@
 import streamlit as st
 import pandas as pd
-import requests
-import datetime
 import gspread
-from datetime import timedelta, timezone
+import datetime
 from supabase import create_client
 
 # ==========================================
 # 設定
 # ==========================================
-st.set_page_config(page_title="Master Repair Tool", layout="wide")
-st.title("🚑 完全修復 & API同期ツール")
+st.set_page_config(page_title="Data Migration Tool", layout="wide")
+st.title("📦 Google Sheets -> Supabase 完全移行ツール")
 
 # 接続
 try:
-    # Supabase
     su_url = st.secrets["supabase"]["url"]
     su_key = st.secrets["supabase"]["key"]
     supabase = create_client(su_url, su_key)
     
-    # Google Sheets
     gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
     sh = gc.open_by_key(st.secrets["sheets"]["sheet_id"])
-    
-    # API Token
-    # Configシートから取るか、Secretsから取る
-    token = st.secrets.get("api_token")
-    if not token:
-        # Configシートから探す
-        ws_conf = sh.worksheet("config")
-        records = ws_conf.get_all_records()
-        for r in records:
-            if r.get('key') == 'FOOTBALL_DATA_API_TOKEN':
-                token = r.get('value')
-                break
 except Exception as e:
     st.error(f"接続設定エラー: {e}")
     st.stop()
 
 # ==========================================
-# 処理ロジック
+# ユーティリティ
 # ==========================================
+def clean_int(val):
+    """カンマ除去して数値化、ダメならNone"""
+    try:
+        s = str(val).replace(',', '').strip()
+        return int(float(s))
+    except:
+        return None
 
-def run_full_repair():
+def clean_float(val):
+    try:
+        s = str(val).replace(',', '').strip()
+        return float(s)
+    except:
+        return None
+
+def clean_gw(val):
+    """GW7 -> 7"""
+    s = str(val).upper()
+    nums = "".join([c for c in s if c.isdigit()])
+    return int(nums) if nums else None
+
+# ==========================================
+# メイン処理
+# ==========================================
+def run_migration():
     logs = []
-    
-    # ----------------------------------------------------
-    # 1. APIから全試合日程を取得 (Matchesの完全化)
-    # ----------------------------------------------------
-    st.subheader("1. 試合データのAPI同期")
-    headers = {'X-Auth-Token': token}
-    # 今シーズン全日程取得
-    url = "https://api.football-data.org/v4/competitions/PL/matches?season=2024" # 2025年なら2024シーズン扱いの場合が多い
+    error_logs = []
     
     try:
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            matches_data = res.json().get('matches', [])
-            upsert_list = []
-            for m in matches_data:
-                upsert_list.append({
-                    "match_id": m['id'],
-                    "season": "2024", # 固定
-                    "gameweek": m['matchday'],
-                    "home_team": m['homeTeam']['name'],
-                    "away_team": m['awayTeam']['name'],
-                    "kickoff_time": m['utcDate'],
-                    "status": m['status'],
-                    "home_score": m['score']['fullTime']['home'],
-                    "away_score": m['score']['fullTime']['away'],
-                    # APIのオッズがあれば入れるが、ロックは解除しない方が安全かも
-                    # ここではマスタデータ構築を優先
-                })
-            
-            # 分割Upsert
-            chunk_size = 100
-            for i in range(0, len(upsert_list), chunk_size):
-                supabase.table("matches").upsert(upsert_list[i:i+chunk_size]).execute()
-                
-            logs.append(f"✅ APIから {len(upsert_list)} 試合のデータを取得・保存しました。")
-        else:
-            st.error(f"API Error: {res.status_code}")
-            return
-    except Exception as e:
-        st.error(f"API接続エラー: {e}")
-        return
+        # 0. 既存データのクリーニング (外部キー制約があるため順番重要: bets -> matches -> users)
+        # しかし今回は「データを入れる」ことが優先なので、一旦全削除
+        st.info("既存データをクリア中...")
+        try:
+            supabase.table("bm_history").delete().neq("season", "dummy").execute()
+            supabase.table("bets").delete().neq("choice", "dummy").execute()
+            # matchesとusersは依存関係があるため、先にusersを入れる
+        except Exception as e:
+            logs.append(f"⚠️ データクリア中に警告: {e}")
 
-    # ----------------------------------------------------
-    # 2. ベット履歴の再取込 (Status修正)
-    # ----------------------------------------------------
-    st.subheader("2. ベット履歴の再取込 (WIN/LOSE修正)")
-    
-    # 既存ベット全削除 (重複防ぐため洗い替え)
-    supabase.table("bets").delete().neq("choice", "dummy").execute() # 全件
-    
-    # User ID マップ
-    users = supabase.table("users").select("user_id, username").execute().data
-    u_map = {u['username']: u['user_id'] for u in users}
-    
-    ws_bets = sh.worksheet("bets")
-    sheet_bets = ws_bets.get_all_records()
-    
-    bets_payload = []
-    skipped = 0
-    
-    for row in sheet_bets:
-        uname = row.get('user')
-        mid = row.get('match_id') or row.get('fd_match_id')
+        # ------------------------------------------------
+        # 1. Users (ConfigシートのJSONではなく、Betsシートから実在ユーザーを抽出)
+        # ------------------------------------------------
+        st.write("1️⃣ ユーザーデータの移行...")
+        ws_bets = sh.worksheet("bets")
+        bets_data = ws_bets.get_all_records()
         
-        # 数値変換など
-        try: mid = int(float(str(mid)))
-        except: mid = None
+        # ユーザー名のユニークリスト作成
+        user_names = set()
+        for r in bets_data:
+            if r.get('user'): user_names.add(str(r.get('user')).strip())
+            
+        # ユーザー登録 (存在しなければ作成)
+        u_map = {} # username -> user_id
+        for name in user_names:
+            # Upsert
+            res = supabase.table("users").upsert({
+                "username": name,
+                "password": "password", # 仮
+                "role": "user",
+                "balance": 0
+            }, on_conflict="username").select().execute()
+            
+            if res.data:
+                u_map[name] = res.data[0]['user_id']
         
-        if uname in u_map and mid:
-            # ★ ここが重要: WIN/LOSE を WON/LOST に変換
-            raw_res = str(row.get('result', '')).upper()
+        logs.append(f"✅ ユーザー登録完了: {len(u_map)}名 ({list(u_map.keys())})")
+
+        # ------------------------------------------------
+        # 2. Matches (Oddsシートからマスタ作成)
+        # ------------------------------------------------
+        st.write("2️⃣ 試合データの移行...")
+        ws_odds = sh.worksheet("odds")
+        odds_data = ws_odds.get_all_records()
+        
+        matches_payload = []
+        seen_match_ids = set()
+        
+        for r in odds_data:
+            mid = clean_int(r.get('match_id') or r.get('fd_match_id'))
+            if not mid: continue
+            
+            if mid in seen_match_ids: continue # 重複スキップ
+            seen_match_ids.add(mid)
+            
+            matches_payload.append({
+                "match_id": mid,
+                "season": "2024",
+                "gameweek": clean_gw(r.get('gw')),
+                "home_team": r.get('home\n') or r.get('home') or "Unknown",
+                "away_team": r.get('away') or "Unknown",
+                "odds_home": clean_float(r.get('home_win')),
+                "odds_draw": clean_float(r.get('draw')),
+                "odds_away": clean_float(r.get('away_win')),
+                "odds_locked": True if str(r.get('locked')).upper() == 'YES' else False,
+                # 日付は後でAPI補完するとして、一旦空でもOKだがエラー回避のため現在時刻などを入れたい
+                # ここではNULL許容と仮定するか、ダミーを入れる
+                "kickoff_time": datetime.datetime.now().isoformat() 
+            })
+            
+        # 分割Insert
+        for i in range(0, len(matches_payload), 100):
+            try:
+                supabase.table("matches").upsert(matches_payload[i:i+100]).execute()
+            except Exception as e:
+                error_logs.append(f"Matches Insert Error (Chunk {i}): {e}")
+                
+        logs.append(f"✅ 試合データ移行: {len(matches_payload)} 件")
+
+        # ------------------------------------------------
+        # 3. Bets (ベット履歴)
+        # ------------------------------------------------
+        st.write("3️⃣ ベット履歴の移行...")
+        bets_payload = []
+        
+        for r in bets_data:
+            uname = str(r.get('user')).strip()
+            if uname not in u_map: continue
+            
+            mid = clean_int(r.get('match_id') or r.get('fd_match_id'))
+            if not mid: continue
+            
+            # Matchが存在しないとエラーになるのでチェック
+            if mid not in seen_match_ids:
+                # 存在しない試合IDへのベットがある場合、ダミー試合を作成してエラー回避
+                try:
+                    supabase.table("matches").upsert({
+                        "match_id": mid,
+                        "season": "2024",
+                        "gameweek": 1,
+                        "home_team": "Unknown Match",
+                        "away_team": "Unknown Match"
+                    }).execute()
+                    seen_match_ids.add(mid)
+                    logs.append(f"⚠️ 未知の試合ID {mid} を補完しました")
+                except:
+                    continue
+
+            # ステータス正規化
+            raw_res = str(r.get('result', '')).upper()
             status = 'PENDING'
             if 'WIN' in raw_res: status = 'WON'
             elif 'LOSE' in raw_res: status = 'LOST'
-            elif 'SETTLED' in str(row.get('status','')).upper(): 
-                # resultが空でもstatusがSETTLEDなら負けの可能性あるが、result優先
-                pass
-                
+            
             bets_payload.append({
                 "user_id": u_map[uname],
                 "match_id": mid,
-                "choice": row.get('pick'),
-                "stake": int(float(str(row.get('stake', 0)).replace(',',''))),
-                "odds_at_bet": float(row.get('odds', 1.0)),
+                "choice": r.get('pick'),
+                "stake": clean_int(r.get('stake')),
+                "odds_at_bet": clean_float(r.get('odds')),
                 "status": status,
-                "created_at": row.get('placed_at') or datetime.datetime.now().isoformat()
+                "created_at": r.get('placed_at')
             })
-        else:
-            skipped += 1
 
-    if bets_payload:
         # 分割Insert
+        success_bets = 0
         for i in range(0, len(bets_payload), 100):
-            supabase.table("bets").insert(bets_payload[i:i+100]).execute()
-        logs.append(f"✅ ベット履歴 {len(bets_payload)} 件を取り込みました (スキップ: {skipped}件)。")
-    
-    # ----------------------------------------------------
-    # 3. BM履歴の取込
-    # ----------------------------------------------------
-    # BM履歴も洗い替え
-    supabase.table("bm_history").delete().neq("season", "dummy").execute()
-    
-    ws_bm = sh.worksheet("bm_log")
-    bm_data = ws_bm.get_all_records()
-    bm_payload = []
-    for row in bm_data:
-        uname = row.get('bookmaker')
-        gw_str = str(row.get('gw',''))
-        # GW番号抽出
-        gw_num = "".join([c for c in gw_str if c.isdigit()])
-        
-        if uname in u_map and gw_num:
-            bm_payload.append({
-                "season": "2024",
-                "gameweek": int(gw_num),
-                "user_id": u_map[uname],
-                "created_at": row.get('decided_at')
-            })
-    
-    if bm_payload:
-        supabase.table("bm_history").insert(bm_payload).execute()
-        logs.append(f"✅ BM履歴 {len(bm_payload)} 件を取り込みました。")
+            try:
+                supabase.table("bets").insert(bets_payload[i:i+100]).execute()
+                success_bets += 100
+            except Exception as e:
+                # Insert失敗時、より詳細にログを出す
+                error_logs.append(f"Bets Insert Error (Chunk {i}): {e}")
+                
+        logs.append(f"✅ ベット履歴移行: 対象 {len(bets_payload)} 件")
 
-    # ----------------------------------------------------
-    # 4. 収支再計算
-    # ----------------------------------------------------
-    st.subheader("3. 収支再計算")
-    
-    # リセット
-    balances = {uid: 0 for uid in u_map.values()}
-    
-    # BMマップ
-    bm_map = {} # (gw) -> uid
-    for b in bm_payload:
-        bm_map[b['gameweek']] = b['user_id']
+        # ------------------------------------------------
+        # 4. BM履歴
+        # ------------------------------------------------
+        st.write("4️⃣ BM履歴の移行...")
+        ws_bm = sh.worksheet("bm_log")
+        bm_data = ws_bm.get_all_records()
+        bm_payload = []
         
-    # ベット履歴から計算
-    # DBに入れたばかりのデータを信頼して使う
-    # しかしAPIからGWを取得したmatchesと紐づける必要がある
-    
-    # 結合が面倒なので、Python上でMatchのGWを参照
-    matches_gw_map = {}
-    all_matches = supabase.table("matches").select("match_id, gameweek").execute().data
-    for m in all_matches:
-        matches_gw_map[m['match_id']] = m['gameweek']
+        for r in bm_data:
+            uname = str(r.get('bookmaker')).strip()
+            if uname in u_map:
+                bm_payload.append({
+                    "season": "2024",
+                    "gameweek": clean_gw(r.get('gw')),
+                    "user_id": u_map[uname],
+                    "created_at": r.get('decided_at')
+                })
         
-    for b in bets_payload:
-        if b['status'] not in ['WON', 'LOST']: continue
+        if bm_payload:
+            supabase.table("bm_history").insert(bm_payload).execute()
         
-        uid = b['user_id']
-        profit = 0
-        if b['status'] == 'WON':
-            profit = int(b['stake'] * b['odds_at_bet']) - b['stake']
-        else:
-            profit = -b['stake']
+        logs.append(f"✅ BM履歴移行: {len(bm_payload)} 件")
+
+        # 完了報告
+        st.success("🎉 データコピー処理が完了しました")
+        for l in logs: st.write(l)
+        if error_logs:
+            st.error("以下のエラーが発生しました:")
+            for e in error_logs: st.write(e)
             
-        # Player反映
-        balances[uid] += profit
+        # 結果確認
+        st.divider()
+        st.subheader("📊 移行結果")
         
-        # BM反映
-        mid = b['match_id']
-        gw = matches_gw_map.get(mid)
-        if gw:
-            bm_id = bm_map.get(gw)
-            if bm_id and bm_id != uid:
-                balances[bm_id] -= profit
-
-    # DB更新
-    for uid, bal in balances.items():
-        supabase.table("users").update({"balance": bal}).eq("user_id", uid).execute()
+        cnt_users = supabase.table("users").select("*", count="exact").execute().count
+        cnt_matches = supabase.table("matches").select("*", count="exact").execute().count
+        cnt_bets = supabase.table("bets").select("*", count="exact").execute().count
         
-    logs.append("✅ 全員の収支を再計算し、DBを更新しました。")
+        st.write(f"- ユーザー数: {cnt_users}")
+        st.write(f"- 試合数: {cnt_matches}")
+        st.write(f"- ベット数: {cnt_bets}")
 
-    # ----------------------------------------------------
-    # 5. GW自動判定
-    # ----------------------------------------------------
-    st.subheader("4. GW自動判定")
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    
-    # DBにはAPIから入れた正確なkickoff_timeがあるはず
-    res = supabase.table("matches").select("gameweek, kickoff_time")\
-        .gt("kickoff_time", now_iso)\
-        .order("kickoff_time")\
-        .limit(1)\
-        .execute()
-        
-    target_gw = 1
-    if res.data:
-        target_gw = res.data[0]['gameweek']
-        logs.append(f"✅ 未来の試合 ({res.data[0]['kickoff_time']}) を検知。次は GW{target_gw} です。")
-    else:
-        # シーズン終了等の場合
-        last = supabase.table("matches").select("gameweek").order("kickoff_time", desc=True).limit(1).execute()
-        if last.data:
-            target_gw = last.data[0]['gameweek']
-            logs.append(f"✅ 未来の試合なし。最新の GW{target_gw} を設定します。")
-            
-    supabase.table("app_config").upsert({"key": "current_gw", "value": str(target_gw)}).execute()
+    except Exception as e:
+        st.error(f"致命的なエラー: {e}")
 
-    # 完了
-    st.success("🎉 すべての修復が完了しました！")
-    for l in logs:
-        st.write(l)
-        
-    # 結果表示
-    st.write("### 📊 現在のステータス")
-    final_users = supabase.table("users").select("username, balance").execute().data
-    st.table(final_users)
-
-if st.button("🚀 実行する", type="primary"):
-    run_full_repair()
+if st.button("🚀 データ移行を実行", type="primary"):
+    run_migration()
