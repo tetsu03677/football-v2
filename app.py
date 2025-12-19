@@ -11,10 +11,11 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS (Native Dark Mode via config.toml)
 # ==============================================================================
-st.set_page_config(page_title="Football App V4.1", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V4.2", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
-# Clean CSS: Focus only on Layout & Glassmorphism. Colors are handled by config.toml.
+# Clean CSS: Focus only on Layout & Glassmorphism.
+# Colors are handled by .streamlit/config.toml (Native Dark Mode).
 st.markdown("""
 <style>
     /* --- Layout --- */
@@ -155,9 +156,7 @@ st.markdown("""
         border-radius: 8px;
         font-size: 0.9rem;
     }
-    .budget-used { color: #f87171; font-weight: bold; }
-    .budget-ok { color: #4ade80; font-weight: bold; }
-
+    
     /* Clean up */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -243,7 +242,7 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     
     if past.empty: return '<span style="opacity:0.2">-</span>'
 
-    past = past.iloc[::-1] # Old -> New
+    past = past.iloc[::-1] # Reverse to make Old -> New
 
     html_parts = ['<div class="form-container"><span class="form-arrow">OLD</span>']
     for _, g in past.iterrows():
@@ -322,46 +321,56 @@ def calculate_profitable_clubs(bets_df, results_df):
         final_ranking[u] = sorted_clubs
     return final_ranking
 
-def calculate_live_pnl(bets_df, results_df, bm_map, users_df, target_gw):
-    """Live P&L with active match simulation"""
+def calculate_live_pnl_and_dream(bets_df, results_df, bm_map, users_df, target_gw):
+    """
+    Live P&L + Dream Logic (Theoretical Max Profit for GW).
+    Dream = Sum((Stake*Odds)-Stake) for ALL bets in GW, regardless of result.
+    """
     base_stats, _ = calculate_stats(bets_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
     live_data = []
 
-    target_bets = bets_df[(bets_df['gw'] == target_gw) & (bets_df.get('result', '') == '')].copy()
+    # Filter bets for target GW
+    gw_bets = bets[bets['gw'] == target_gw].copy() if not bets.empty else pd.DataFrame()
+    
+    # Init Simulation Data
     sim_pnl = {u: 0 for u in users_df['username'].unique()}
-    max_pot = {u: 0 for u in users_df['username'].unique()} # Max Potential
+    dream_profit = {u: 0 for u in users_df['username'].unique()}
     current_bm = bm_map.get(target_gw)
     
-    if not target_bets.empty and not results_df.empty:
-        for _, b in target_bets.iterrows():
+    if not gw_bets.empty and not results_df.empty:
+        for _, b in gw_bets.iterrows():
             mid = b['match_id']
             m_row = results_df[results_df['match_id'] == mid]
             if m_row.empty: continue
             m = m_row.iloc[0]
             
-            # Max Potential Calculation (If this bet wins)
+            # --- 1. Dream Logic (Theoretical Max Profit for GW) ---
+            # Calculate potential profit if this bet wins (regardless of actual status)
             pot_win = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
-            max_pot[b['user']] += int(pot_win)
+            dream_profit[b['user']] += int(pot_win)
             
-            # Live Simulation
-            if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
-                h_sc = int(m['home_score']) if pd.notna(m['home_score']) else 0
-                a_sc = int(m['away_score']) if pd.notna(m['away_score']) else 0
-                outcome = "DRAW"
-                if h_sc > a_sc: outcome = "HOME"
-                elif a_sc > h_sc: outcome = "AWAY"
-                
-                pnl = pot_win if b['pick'] == outcome else -float(b['stake'])
-                sim_pnl[b['user']] += int(pnl)
-                if current_bm and current_bm in sim_pnl and current_bm != b['user']:
-                    sim_pnl[current_bm] -= int(pnl)
+            # --- 2. Live P&L Simulation ---
+            # Only if status is OPEN in DB (not settled)
+            if b.get('result', '') == '':
+                if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
+                    # Simulate match result
+                    h_sc = int(m['home_score']) if pd.notna(m['home_score']) else 0
+                    a_sc = int(m['away_score']) if pd.notna(m['away_score']) else 0
+                    outcome = "DRAW"
+                    if h_sc > a_sc: outcome = "HOME"
+                    elif a_sc > h_sc: outcome = "AWAY"
+                    
+                    pnl = pot_win if b['pick'] == outcome else -float(b['stake'])
+                    sim_pnl[b['user']] += int(pnl)
+                    if current_bm and current_bm in sim_pnl and current_bm != b['user']:
+                        sim_pnl[current_bm] -= int(pnl)
 
     for u, s in base_stats.items():
         live_data.append({
             'User': u, 
             'Total': s['balance'] + sim_pnl.get(u, 0), 
             'LiveDiff': sim_pnl.get(u, 0),
-            'MaxPotential': s['balance'] + max_pot.get(u, 0) # Base + All Pending Wins
+            'DreamProfit': dream_profit.get(u, 0)
         })
     return pd.DataFrame(live_data).sort_values('Total', ascending=False)
 
@@ -460,9 +469,9 @@ def main():
     role = st.session_state.get('role', 'user')
     token = get_api_token(config)
 
-    if 'v41_synced' not in st.session_state:
+    if 'v42_synced' not in st.session_state:
         with st.spinner("Syncing..."): sync_api(token)
-        st.session_state['v41_synced'] = True; st.rerun()
+        st.session_state['v42_synced'] = True; st.rerun()
 
     target_gw = get_strict_target_gw(results)
     check_and_assign_bm(target_gw, bm_log, users)
@@ -478,8 +487,8 @@ def main():
     lock_mins = get_config_value(config, "lock_minutes_before_earliest", 60)
     gw_locked = False
     
-    # Budget Logic
-    budget_limit = get_config_value(config, "gw_budget_limit", 20000)
+    # Budget Logic (max_total_stake_per_gw)
+    budget_limit = get_config_value(config, "max_total_stake_per_gw", 20000)
     current_spend = 0
     if not bets.empty:
         my_gw_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw)]
@@ -592,20 +601,18 @@ def main():
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH", use_container_width=True): sync_api(token); st.rerun()
         
-        live_df = calculate_live_pnl(bets, results, bm_map, users, target_gw)
+        live_df = calculate_live_pnl_and_dream(bets, results, bm_map, users, target_gw)
         
         st.markdown("#### LEADERBOARD")
         if not live_df.empty:
-            # Sort by Total (Ranking)
-            live_df = live_df.sort_values('Total', ascending=False)
+            # Ranking by Total
             rank = 1
             for _, r in live_df.iterrows():
                 diff = r['LiveDiff']
                 diff_str = f"+¥{diff:,}" if diff > 0 else (f"¥{diff:,}" if diff < 0 else "-")
                 col = "#4ade80" if diff > 0 else ("#f87171" if diff < 0 else "#666")
                 
-                # Max Potential
-                max_val = r['MaxPotential']
+                dream_val = r['DreamProfit']
                 
                 st.markdown(f"""
                 <div style="display:flex; flex-direction:column; padding:12px; background:rgba(255,255,255,0.03); margin-bottom:8px; border-radius:6px;">
@@ -617,8 +624,8 @@ def main():
                             <div style="font-size:0.8rem; color:{col}; font-family:monospace">({diff_str})</div>
                         </div>
                     </div>
-                    <div style="text-align:right; font-size:0.7rem; color:#aaa; margin-top:4px;">
-                        THEORETICAL MAX: <span style="color:#a5b4fc">¥{int(max_val):,}</span>
+                    <div style="text-align:right; font-size:0.7rem; opacity:0.6; margin-top:4px;">
+                        THEORETICAL GW PROFIT: <span style="color:#a5b4fc">¥{int(dream_val):,}</span>
                     </div>
                 </div>""", unsafe_allow_html=True)
                 rank += 1
