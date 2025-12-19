@@ -36,7 +36,7 @@ st.divider()
 
 # --- シート選択UI ---
 st.subheader("1. シートの割り当て")
-st.info("スプレッドシートにあるシート名を選択してください。")
+st.info("データが入っているシート名を選択してください。")
 
 # 全シート名を取得
 worksheet_list = sh.worksheets()
@@ -44,13 +44,23 @@ sheet_names = [ws.title for ws in worksheet_list]
 
 col1, col2 = st.columns(2)
 with col1:
-    # 試合日程のシートを選ぶ（初期値で 'schedule' があればそれを優先）
-    default_schedule = sheet_names.index("schedule") if "schedule" in sheet_names else 0
-    sheet_matches = st.selectbox("📅 試合日程 (Matches) のシート", sheet_names, index=default_schedule)
+    # 試合日程のシートを選ぶ
+    # "schedule" や "fixture" が含まれるシートを初期値にする
+    default_sched = 0
+    for i, name in enumerate(sheet_names):
+        if "schedule" in name.lower() or "fixture" in name.lower() or "match" in name.lower():
+            default_sched = i
+            break
+    sheet_matches = st.selectbox("📅 試合日程 (Matches) のシート", sheet_names, index=default_sched)
 
 with col2:
-    # ベット履歴のシートを選ぶ（初期値で 'bets' があればそれを優先）
-    default_bets = sheet_names.index("bets") if "bets" in sheet_names else 0
+    # ベット履歴のシートを選ぶ
+    # "bet" が含まれるシートを初期値にする
+    default_bets = 0
+    for i, name in enumerate(sheet_names):
+        if "bet" in name.lower():
+            default_bets = i
+            break
     sheet_bets = st.selectbox("🎫 ベット履歴 (Bets) のシート", sheet_names, index=default_bets)
 
 st.divider()
@@ -58,7 +68,7 @@ st.divider()
 # --- 移行ロジック ---
 st.subheader("2. データ移行の実行")
 
-if st.button("🚀 移行スタート (修正版)"):
+if st.button("🚀 移行スタート (確定版)"):
     status = st.empty()
     
     # -------------------------------------------------
@@ -69,24 +79,23 @@ if st.button("🚀 移行スタート (修正版)"):
         ws_bets = sh.worksheet(sheet_bets)
         bets_data = ws_bets.get_all_records()
         
-        # 'user' カラムからユニークなユーザー名を抽出
-        # CSVによるとカラム名は "user" (小文字) です
+        # あなたのカラム名 'user' を使用
         found_users = set()
         for row in bets_data:
-            if row.get("user"):
-                found_users.add(row["user"])
+            if row.get("user"): # 'user'列があるか確認
+                found_users.add(str(row["user"])) # 文字列として取得
         
         if not found_users:
-            st.error("ベットシートに 'user' カラムが見つかりません。カラム名を確認してください。")
+            st.error(f"シート '{sheet_bets}' に 'user' 列が見つからないか、データが空です。")
             st.stop()
             
-        st.write(f"検出されたユーザー: {found_users}")
+        st.write(f"検出されたユーザー: {list(found_users)}")
         
         # Supabaseに登録
         for u in found_users:
             supabase.table("users").upsert({"username": u, "balance": 10000}, on_conflict="username").execute()
             
-        # IDマップ作成
+        # IDマップ作成 (username -> user_id)
         user_map = {}
         db_users = supabase.table("users").select("user_id, username").execute()
         for u in db_users.data:
@@ -108,27 +117,30 @@ if st.button("🚀 移行スタート (修正版)"):
         
         matches_payload = []
         for r in matches_data:
-            # 必須項目のチェック
+            # match_id が空の行はスキップ
             if not r.get("match_id"): continue
+            
+            # 日付フォーマットの調整 (エラー回避のため文字列化)
+            k_time = str(r.get("kickoff_time", "2024-01-01 00:00:00+00"))
             
             matches_payload.append({
                 "match_id": r["match_id"],
                 "season": "2024-2025",
-                "gameweek": r.get("gameweek") or r.get("gw") or 0, # gwカラム対応
+                "gameweek": r.get("gameweek") or r.get("gw") or 0,
                 "home_team": r.get("home_team", "Unknown"),
                 "away_team": r.get("away_team", "Unknown"),
-                "kickoff_time": r.get("kickoff_time", "2024-01-01 00:00:00+00"),
+                "kickoff_time": k_time,
                 "status": r.get("status", "SCHEDULED"),
-                # スコアがあれば入れる
                 "home_score": r.get("home_score") if r.get("home_score") != "" else None,
                 "away_score": r.get("away_score") if r.get("away_score") != "" else None
             })
             
         if matches_payload:
+            # データが多い場合に備えて分割インサートなどはせず、今回は一括でトライ
             supabase.table("matches").upsert(matches_payload).execute()
             st.success(f"✅ 試合データ移行完了: {len(matches_payload)} 件")
         else:
-            st.warning("試合データが見つかりませんでした (match_idカラムはありますか？)")
+            st.warning("試合データが見つかりませんでした (match_id列を確認してください)")
 
     except Exception as e:
         st.error(f"試合データ移行エラー: {e}")
@@ -138,18 +150,18 @@ if st.button("🚀 移行スタート (修正版)"):
     # -------------------------------------------------
     status.info("ベットデータを移行中...")
     try:
-        # さきほど読み込んだ bets_data を使用
         bets_payload = []
         for r in bets_data:
-            u_name = r.get("user")
+            u_name = str(r.get("user"))
             if u_name in user_map:
                 bets_payload.append({
                     "user_id": user_map[u_name],
                     "match_id": r.get("match_id"),
-                    "choice": r.get("pick", ""), # CSVによると "pick"
-                    "stake": r.get("stake", 0),
-                    "odds_at_bet": r.get("odds", 1.0),
-                    "status": "PENDING" # statusカラムがあれば r.get("status") でも可
+                    "choice": r.get("pick", ""),   # あなたのCSV通り 'pick'
+                    "stake": r.get("stake", 0),    # あなたのCSV通り 'stake'
+                    "odds_at_bet": r.get("odds", 1.0), # あなたのCSV通り 'odds'
+                    "status": "PENDING" 
+                    # resultやpayoutは一旦計算せず、まずはベット履歴として取り込みます
                 })
                 
         if bets_payload:
@@ -162,4 +174,4 @@ if st.button("🚀 移行スタート (修正版)"):
         st.error(f"ベットデータ移行エラー: {e}")
 
     st.balloons()
-    st.success("🎉 全データ移行完了！これでV2への準備は整いました。")
+    st.success("🎉 全データ移行完了！")
