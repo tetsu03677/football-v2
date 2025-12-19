@@ -1,82 +1,108 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client
 import datetime
+from supabase import create_client
 
+# --- 接続設定 ---
 st.set_page_config(page_title="Data Repair", layout="centered")
-
-# --- 接続 ---
 try:
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
-    supabase = create_client(url, key)
+    supabase = create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["key"])
 except:
     st.error("Supabase接続エラー")
     st.stop()
 
-st.title("🛠 データベース整合性修復ツール")
-st.warning("このツールは、ベット履歴から所持金を再計算し、Google Sheetsの状態と一致させます。")
+st.title("🛠 データ整合性 修復ツール")
+st.info("ベット履歴から『現在の正しい所持金』を再計算し、現在日時から『正しいGW』を判定します。")
 
-if st.button("実行: 所持金再計算 & GW自動設定", type="primary"):
+if st.button("🚀 修復実行 (Recalculate & Auto-GW)", type="primary"):
     log = st.empty()
-    
-    with st.spinner("計算中..."):
-        # 1. ユーザー全員のバランスをリセット
-        users = supabase.table("users").select("user_id, username").execute().data
-        
-        # 2. 全ベット履歴を取得 (WON/LOSTのみ)
-        all_bets = supabase.table("bets").select("user_id, stake, odds_at_bet, status, choice").execute().data
-        
-        # 集計ロジック
-        balance_map = {u['user_id']: 0 for u in users} # 初期値0（または10000などルールによるが、履歴が全てあるなら0スタートで積み上げ）
-        
-        # もし「初期所持金 10,000円」などのルールがある場合はここで設定
-        # balance_map = {u['user_id']: 10000 for u in users} 
-        
-        for b in all_bets:
-            uid = b['user_id']
-            if uid not in balance_map: continue
+    logs = []
+
+    try:
+        with st.spinner("データベースをスキャン中..."):
+            # 1. 必要な全データを取得
+            users = supabase.table("users").select("*").execute().data
+            bets = supabase.table("bets").select("*, matches(gameweek)").execute().data
+            bm_history = supabase.table("bm_history").select("*").execute().data
             
-            status = b['status']
-            if status == 'WON':
-                # 利益 = (賭け金 * オッズ) - 賭け金
-                profit = (b['stake'] * b['odds_at_bet']) - b['stake']
-                balance_map[uid] += int(profit)
-            elif status == 'LOST':
-                # 損失 = 賭け金
-                balance_map[uid] -= int(b['stake'])
-        
-        # 3. DB更新
-        for uid, amount in balance_map.items():
-            supabase.table("users").update({"balance": amount}).eq("user_id", uid).execute()
+            # 2. バランスのリセット (全員0スタート)
+            balance_map = {u['user_id']: 0 for u in users}
+            logs.append("・全ユーザーの所持金を 0 にリセットしました。")
+
+            # 3. BMマップ作成 (GW -> BMのUser ID)
+            # { (season, gw): bm_user_id }
+            bm_map = {}
+            for h in bm_history:
+                key = (str(h.get('season','2024')), int(h['gameweek']))
+                bm_map[key] = h['user_id']
+
+            # 4. 全ベット履歴を再演 (Replay) して計算
+            for b in bets:
+                if b['status'] not in ['WON', 'LOST']: continue
+                
+                player_id = b['user_id']
+                gw = b['matches']['gameweek']
+                season = "2024" # 仮固定（本来はbetsかmatchesから取得）
+                
+                # プレイヤーの損益計算
+                pnl = 0
+                stake = int(b['stake'])
+                odds = float(b['odds_at_bet'])
+                
+                if b['status'] == 'WON':
+                    pnl = int(stake * odds) - stake # 利益
+                else:
+                    pnl = -stake # 損失
+                
+                # Player反映
+                if player_id in balance_map:
+                    balance_map[player_id] += pnl
+                
+                # BM反映 (P2P: Playerの逆)
+                bm_key = (season, gw)
+                if bm_key in bm_map:
+                    bm_id = bm_map[bm_key]
+                    # 自分自身がBMで賭けているケース（通常ないが）は相殺
+                    if bm_id != player_id and bm_id in balance_map:
+                        balance_map[bm_id] -= pnl # Playerが勝てばBMは負ける
+
+            # 5. DBへ書き込み (Balance)
+            for uid, bal in balance_map.items():
+                supabase.table("users").update({"balance": bal}).eq("user_id", uid).execute()
+            logs.append(f"・ベット履歴 {len(bets)} 件から所持金を再計算しました。")
+
+            # 6. GWの自動判定
+            # 「まだ始まっていない（または終わっていない）試合」の中で、最も日時が古いもののGWを採用
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
             
-        log.write(f"✅ {len(users)}名の所持金を再計算しました。")
-        
-        # 4. GWの自動修正 (最も未来に近い未消化試合のGW)
-        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        
-        # これから行われる試合の最小GWを取得
-        future_matches = supabase.table("matches").select("gameweek")\
-            .gte("kickoff_time", now_iso)\
-            .order("kickoff_time")\
-            .limit(1)\
-            .execute()
+            future_match = supabase.table("matches").select("gameweek, kickoff_time")\
+                .gt("kickoff_time", now_iso)\
+                .order("kickoff_time")\
+                .limit(1)\
+                .execute()
             
-        target_gw = 1
-        if future_matches.data:
-            target_gw = future_matches.data[0]['gameweek']
-        else:
-            # 未来の試合がない＝最新の過去試合のGW
-            last_match = supabase.table("matches").select("gameweek").order("kickoff_time", desc=True).limit(1).execute()
-            if last_match.data:
-                target_gw = last_match.data[0]['gameweek']
-        
-        supabase.table("app_config").upsert({"key": "current_gw", "value": str(target_gw)}).execute()
-        log.write(f"✅ 現在のGWを「{target_gw}」に設定しました。")
-        
-        # 確認用表示
-        st.success("完了しました。以下の数値が正しいか確認してください。")
-        
-        # 最新データを表示
-        updated_users = supabase.table("users").select("username, balance").execute().data
-        st.table(updated_users)
+            new_gw = 1
+            if future_match.data:
+                new_gw = future_match.data[0]['gameweek']
+                logs.append(f"・未来の試合を検知: 次は GW{new_gw} です。")
+            else:
+                # 未来がないなら最新のGW
+                last_match = supabase.table("matches").select("gameweek").order("kickoff_time", desc=True).limit(1).execute()
+                if last_match.data:
+                    new_gw = last_match.data[0]['gameweek']
+                    logs.append(f"・全日程終了: 最新は GW{new_gw} です。")
+
+            # Config更新
+            supabase.table("app_config").upsert({"key": "current_gw", "value": str(new_gw)}).execute()
+            
+            # 結果表示
+            st.success("✅ 修復完了！")
+            for l in logs:
+                st.write(l)
+            
+            st.markdown("### 📊 最新ステータス")
+            new_users = supabase.table("users").select("username, balance").execute().data
+            st.table(new_users)
+            
+    except Exception as e:
+        st.error(f"エラー: {e}")
