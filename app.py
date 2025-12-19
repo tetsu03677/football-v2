@@ -81,38 +81,4 @@ if st.button("🚀 移行スタート (実行)"):
                 "season": "2024-2025",
                 "gameweek": r.get("gameweek") or r.get("gw") or 0,
                 "home_team": r.get("home_team", "Unknown"),
-                "away_team": r.get("away_team", "Unknown"),
-                "kickoff_time": str(r.get("kickoff_time", "2024-01-01 00:00:00+00")),
-                "status": r.get("status", "SCHEDULED"),
-                "home_score": r.get("home_score") if r.get("home_score") != "" else None,
-                "away_score": r.get("away_score") if r.get("away_score") != "" else None
-            })
-        if matches_payload:
-            supabase.table("matches").upsert(matches_payload).execute()
-            st.write(f"✅ 試合データ完了: {len(matches_payload)}件")
-    except Exception as e:
-        st.warning(f"試合データ移行失敗: {e}")
-
-    # 3. ベットデータ移行
-    status.info("ベットデータ移行中...")
-    try:
-        bets_payload = []
-        for r in bets_data:
-            u_name = str(r.get("user"))
-            if u_name in user_map:
-                bets_payload.append({
-                    "user_id": user_map[u_name],
-                    "match_id": r.get("match_id"),
-                    "choice": r.get("pick", ""), # CSVに基づき 'pick'
-                    "stake": r.get("stake", 0),
-                    "odds_at_bet": r.get("odds", 1.0),
-                    "status": "PENDING"
-                })
-        if bets_payload:
-            supabase.table("bets").insert(bets_payload).execute()
-            st.write(f"✅ ベットデータ完了: {len(bets_payload)}件")
-    except Exception as e:
-        st.error(f"ベットデータ移行エラー: {e}")
-
-    st.balloons()
-    st.success("🎉 全データ移行完了！ これで準備はすべて整いました。")
+                "away_team": r.get("away_team",
