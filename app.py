@@ -5,137 +5,115 @@ import datetime
 import time
 import pytz
 import random
-import altair as alt
 from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (Ultimate Dark Mode)
+# 0. System Configuration & CSS (Minimalist Typography)
 # ==============================================================================
-st.set_page_config(page_title="Football App V3.7", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V3.8", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
+# Minimalist CSS: No hacks, just elegant layout and typography
 st.markdown("""
 <style>
-    /* --- Root Variables & Reset --- */
-    :root {
-        --bg-color: #0e1117;
-        --card-bg: #1f2937; /* Slightly lighter dark */
-        --input-bg: #262730;
-        --text-color: #fafafa;
-        --accent-color: #fbbf24;
-        --win-color: #4ade80;
-        --lose-color: #f87171;
-    }
-    
-    .stApp {
-        background-color: var(--bg-color);
-        color: var(--text-color);
-    }
-
-    /* --- Overriding Streamlit Widgets (Dark Mode Enforcement) --- */
-    /* Input fields background & text */
-    .stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"] {
-        background-color: var(--input-bg) !important;
-        color: var(--text-color) !important;
-        border: 1px solid rgba(255,255,255,0.1) !important;
-    }
-    /* Selectbox dropdown options */
-    ul[data-baseweb="menu"] {
-        background-color: var(--input-bg) !important;
-    }
-    /* Secondary text */
-    p, label, .stMarkdown {
-        color: #e5e7eb !important;
-    }
-
     /* --- Layout --- */
     .block-container {
-        padding-top: 3.5rem;
-        padding-bottom: 6rem;
+        padding-top: 3rem;
+        padding-bottom: 5rem;
         max-width: 100%;
         padding-left: 0.5rem;
         padding-right: 0.5rem;
     }
 
     /* --- Vertical Card Integration --- */
-    /* Top HTML Part */
+    /* Integrated Card Look using Streamlit's native theme colors + transparency */
     .app-card-top {
         border: 1px solid rgba(255,255,255,0.08);
         border-bottom: none;
         border-radius: 12px 12px 0 0;
-        padding: 16px;
-        background: linear-gradient(180deg, rgba(30,30,30,1) 0%, rgba(20,20,20,1) 100%);
+        padding: 20px 20px 10px 20px;
+        background: rgba(255,255,255,0.03); /* Subtle overlay */
         margin-bottom: 0px;
     }
-    /* Bottom Form Part */
+    
     [data-testid="stForm"] {
         border: 1px solid rgba(255,255,255,0.08);
         border-top: none;
         border-radius: 0 0 12px 12px;
-        padding: 0 16px 16px 16px;
-        background: linear-gradient(180deg, rgba(20,20,20,1) 0%, rgba(15,15,15,1) 100%);
-        margin-bottom: 24px; /* Space between matches */
+        padding: 0 20px 20px 20px;
+        background: rgba(255,255,255,0.015); /* Slightly lighter bottom */
+        margin-bottom: 24px;
     }
 
-    /* --- Typography & Components --- */
+    /* --- Typography & Elements --- */
     .card-header {
         display: flex; justify-content: space-between;
-        font-family: 'Courier New', monospace; font-size: 0.8rem; color: #9ca3af;
-        border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; margin-bottom: 12px;
+        font-family: 'Courier New', monospace; font-size: 0.8rem; opacity: 0.7;
+        border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; margin-bottom: 16px;
     }
     
     .matchup-grid {
         display: grid; grid-template-columns: 1fr auto 1fr;
-        align-items: center; text-align: center; gap: 8px; margin-bottom: 12px;
+        align-items: center; text-align: center; gap: 10px; margin-bottom: 16px;
     }
-    .team-name { font-weight: 700; font-size: 1.0rem; line-height: 1.2; min-height: 2.4em; display:flex; align-items:center; justify-content:center; color: #fff; }
+    
+    .team-name { 
+        font-weight: 700; font-size: 1.1rem; line-height: 1.3; min-height: 2.4em; 
+        display:flex; align-items:center; justify-content:center; letter-spacing: 0.02em;
+    }
+    
     .score-box { 
-        font-family: 'Courier New', monospace; font-size: 1.6rem; font-weight: 800; 
-        color: #fff; background: rgba(255,255,255,0.05); padding: 4px 12px; border-radius: 6px; letter-spacing: 2px;
+        font-family: 'Courier New', monospace; font-size: 1.8rem; font-weight: 800; 
+        padding: 0 15px; opacity: 0.9; letter-spacing: 2px;
     }
     
-    .form-box { display: flex; gap: 4px; justify-content: center; margin-top: 6px; }
+    /* --- Form Guide (Old -> New) --- */
+    .form-container { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; opacity: 0.9; }
+    .form-arrow { font-size: 0.6rem; color: #666; font-family: sans-serif; text-transform: uppercase; margin: 0 4px; }
     .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; }
-    .form-ha { font-size: 0.6rem; color: #6b7280; font-weight: bold; margin-bottom: 2px; }
-    .form-icon { font-size: 0.85rem; } /* Minimalist sizing */
+    .form-ha { font-size: 0.55rem; opacity: 0.5; font-weight: bold; margin-bottom: 3px; }
+    .form-icon { font-size: 0.8rem; }
     
+    /* --- Odds --- */
     .info-row {
         display: flex; justify-content: space-around; background: rgba(0,0,0,0.2);
-        padding: 8px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 8px;
+        padding: 10px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px;
     }
-    .odds-label { font-size: 0.65rem; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; }
-    .odds-value { font-weight: bold; color: var(--win-color); font-family: monospace; font-size: 1rem; }
+    .odds-label { font-size: 0.65rem; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; }
+    .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.1rem; }
 
-    /* Social Badges (Text Based, No Icons) */
+    /* --- Badges --- */
     .social-bets-container { 
-        display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
-        padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.05);
+        display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+        padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);
     }
     .bet-badge {
         display: inline-flex; align-items: center; gap: 6px;
-        background: rgba(0,0,0,0.3); padding: 4px 10px; border-radius: 4px;
-        font-size: 0.7rem; color: #9ca3af; border: 1px solid rgba(255,255,255,0.05);
+        background: rgba(255,255,255,0.05); padding: 5px 10px; border-radius: 4px;
+        font-size: 0.75rem; border: 1px solid rgba(255,255,255,0.05);
     }
-    .bet-badge.me { 
-        background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #fff; 
-    }
+    .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); }
     .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
 
-    /* Status Messages */
-    .status-msg { text-align: center; color: #6b7280; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 10px; padding-bottom: 8px; }
-    .bm-badge { background: var(--accent-color); color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.7rem; text-transform: uppercase; }
+    /* --- Live & Status --- */
+    @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
+    .live-dot { color: #f87171; animation: pulse 2s infinite; font-weight: bold; margin-right:4px; }
+    .status-msg { text-align: center; opacity: 0.5; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 12px; padding-bottom: 8px; }
+    .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; }
 
-    /* Live Pulse Animation */
-    @keyframes pulse-red { 0% { color: #fff; opacity: 1; } 50% { color: #f87171; opacity: 0.7; } 100% { color: #fff; opacity: 1; } }
-    .live-inplay { animation: pulse-red 2s infinite; font-weight: bold; color: #f87171; }
+    /* --- Dashboard Lists --- */
+    .kpi-box { text-align: center; padding: 20px; background: rgba(255,255,255,0.02); border-radius: 8px; }
+    .kpi-label { font-size: 0.8rem; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; }
+    .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; margin-top: 4px; }
+    
+    .rank-list-item { 
+        display: flex; justify-content: space-between; padding: 12px 0; 
+        border-bottom: 1px solid rgba(255,255,255,0.05); font-family: 'Courier New', monospace; 
+    }
+    .rank-pos { color: #fbbf24; font-weight: bold; margin-right: 12px; }
 
-    /* History Cards */
-    .hist-card { background: rgba(255,255,255,0.02); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
-    .h-win { border-left-color: var(--win-color); }
-    .h-lose { border-left-color: var(--lose-color); }
-
-    /* Clean up Streamlit */
+    /* Hide Streamlit Branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -153,7 +131,7 @@ def get_supabase():
 supabase = get_supabase()
 
 def fetch_all_data():
-    """Fetch all tables safely, ensuring no KeyError even if empty."""
+    [cite_start]"""Fetch all tables safely[cite: 3]."""
     try:
         def get_df_safe(table, expected_cols):
             try:
@@ -165,17 +143,16 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        # Bets: Added 'gw' just in case
-        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','status','result','gw','placed_at'])
-        odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
-        results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score'])
-        bm_log = get_df_safe("bm_log", ['gw','bookmaker'])
+        [cite_start]bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at']) # [cite: 4]
+        [cite_start]odds = get_df_safe("odds", ['match_id','home_win','draw','away_win']) # [cite: 6]
+        [cite_start]results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score']) # [cite: 5]
+        [cite_start]bm_log = get_df_safe("bm_log", ['gw','bookmaker']) # [cite: 6]
         users = get_df_safe("users", ['username','password','role','team'])
-        config = get_df_safe("config", ['key','value'])
+        [cite_start]config = get_df_safe("config", ['key','value']) # [cite: 7]
         
         return bets, odds, results, bm_log, users, config
     except Exception as e:
-        st.error(f"Critical System Error: {e}")
+        st.error(f"System Error: {e}")
         return [pd.DataFrame()]*6
 
 def get_api_token(config_df):
@@ -195,7 +172,7 @@ def get_config_value(config_df, key, default):
     return default
 
 # ==============================================================================
-# 2. Business Logic (Robust & Strict)
+# 2. Business Logic (V3.8 Specifications)
 # ==============================================================================
 
 def to_jst(iso_str):
@@ -208,14 +185,15 @@ def to_jst(iso_str):
 
 def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     """
-    Generate HTML Form Guide (Single Line String).
-    Safe logic: Only 2025 season, finished matches.
+    Generate Form Guide HTML (Single Line).
+    [cite_start]Order: Old (Left) -> New (Right) [cite: 9]
     """
     if results_df.empty: return "-"
     if 'dt_jst' not in results_df.columns:
         results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
     
     season_start = pd.Timestamp("2025-07-01", tz=JST)
+    # Get 5 most recent matches (Newest first)
     past = results_df[
         (results_df['dt_jst'] >= season_start) &
         (results_df['status'] == 'FINISHED') & 
@@ -223,25 +201,27 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
         ((results_df['home'] == team_name) | (results_df['away'] == team_name))
     ].sort_values('dt_jst', ascending=False).head(5)
     
-    if past.empty: return '<span style="color:#4b5563">-</span>'
+    if past.empty: return '<span style="opacity:0.3">-</span>'
 
-    # Build HTML as a single concatenated string (NO NEWLINES)
-    html_parts = ['<div class="form-box">']
+    # Reverse to make it Old -> New
+    past = past.iloc[::-1]
+
+    # Build HTML as a single concatenated string
+    html_parts = ['<div class="form-container"><span class="form-arrow">Old &larr;</span>']
     for _, g in past.iterrows():
         is_home = (g['home'] == team_name)
         ha_label = "H" if is_home else "A"
         
-        # Safe score handling
         h = int(g['home_score']) if pd.notna(g['home_score']) else 0
         a = int(g['away_score']) if pd.notna(g['away_score']) else 0
         
-        icon = '❌' # Default
-        if h == a: icon = '<span style="color:#9ca3af">▲</span>'
+        icon = '❌'
+        if h == a: icon = '<span style="opacity:0.6">▲</span>'
         elif (is_home and h > a) or (not is_home and a > h): icon = '🔵'
         
         html_parts.append(f'<div class="form-item"><span class="form-ha">{ha_label}</span><span class="form-icon">{icon}</span></div>')
     
-    html_parts.append('</div>')
+    html_parts.append('<span class="form-arrow">&rarr; New</span></div>')
     return "".join(html_parts)
 
 def calculate_stats(bets_df, bm_log_df, users_df):
@@ -261,8 +241,10 @@ def calculate_stats(bets_df, bm_log_df, users_df):
         user = b['user']
         if user not in stats: continue
         res = str(b.get('result', '')).upper()
-        status = str(b.get('status', '')).upper()
-        is_settled = (res in ['WIN', 'LOSE']) or (status == 'SETTLED' and res)
+        
+        # Determine settled status from result column primarily
+        is_settled = (res in ['WIN', 'LOSE'])
+        
         stake = float(b['stake']) if b['stake'] else 0
         odds = float(b['odds']) if b['odds'] else 1.0
         
@@ -274,6 +256,8 @@ def calculate_stats(bets_df, bm_log_df, users_df):
             stats[user]['total'] += 1
             pnl = (stake * odds) - stake if res == 'WIN' else -stake
             stats[user]['balance'] += int(pnl)
+            if res == 'WIN': stats[user]['wins'] += 1
+            
             if bm and bm in stats and bm != user:
                 stats[bm]['balance'] -= int(pnl)
         else:
@@ -281,12 +265,54 @@ def calculate_stats(bets_df, bm_log_df, users_df):
 
     return stats, bm_map
 
+def calculate_profitable_clubs(bets_df, results_df):
+    """
+    [cite_start]Dashboard Logic: Calculate Profitable Clubs (TOP 3) per user[cite: 8].
+    Returns dict: {user: [{'team': 'Arsenal', 'profit': 15000}, ...]}
+    """
+    if bets_df.empty or results_df.empty: return {}
+    
+    # Filter winning bets
+    wins = bets_df[bets_df['result'] == 'WIN'].copy()
+    if wins.empty: return {}
+    
+    user_club_pnl = {} # {user: {team: profit}}
+    
+    for _, b in wins.iterrows():
+        user = b['user']
+        mid = b['match_id']
+        pick = b['pick']
+        
+        # Get match info
+        m_rows = results_df[results_df['match_id'] == mid]
+        if m_rows.empty: continue
+        m = m_rows.iloc[0]
+        
+        # Identify Team
+        team = None
+        if pick == 'HOME': team = m['home']
+        elif pick == 'AWAY': team = m['away']
+        # Draw is not a club, skip or treat as "Draw" (Design says "Profitable Clubs", implies teams)
+        
+        if team:
+            if user not in user_club_pnl: user_club_pnl[user] = {}
+            profit = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
+            user_club_pnl[user][team] = user_club_pnl[user].get(team, 0) + int(profit)
+            
+    # Sort and take Top 3
+    final_ranking = {}
+    for u, clubs in user_club_pnl.items():
+        sorted_clubs = sorted(clubs.items(), key=lambda x: x[1], reverse=True)[:3]
+        final_ranking[u] = sorted_clubs
+        
+    return final_ranking
+
 def calculate_live_pnl(bets_df, results_df, bm_map, users_df, target_gw):
-    """Live P&L with active match simulation"""
+    """Live P&L"""
     base_stats, _ = calculate_stats(bets_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
     live_data = []
 
-    target_bets = bets_df[(bets_df['gw'] == target_gw) & (bets_df['status'] == 'OPEN')].copy()
+    target_bets = bets_df[(bets_df['gw'] == target_gw) & (bets_df.get('result', '') == '')].copy() # Open bets
     sim_pnl = {u: 0 for u in users_df['username'].unique()}
     current_bm = bm_map.get(target_gw)
     
@@ -297,10 +323,8 @@ def calculate_live_pnl(bets_df, results_df, bm_map, users_df, target_gw):
             if m_row.empty: continue
             m = m_row.iloc[0]
             if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
-                # Safe Score Parsing
                 h_sc = int(m['home_score']) if pd.notna(m['home_score']) else 0
                 a_sc = int(m['away_score']) if pd.notna(m['away_score']) else 0
-                
                 outcome = "DRAW"
                 if h_sc > a_sc: outcome = "HOME"
                 elif a_sc > h_sc: outcome = "AWAY"
@@ -317,24 +341,24 @@ def calculate_live_pnl(bets_df, results_df, bm_map, users_df, target_gw):
     return pd.DataFrame(live_data).sort_values('Total', ascending=False)
 
 def get_strict_target_gw(results_df):
-    """Find earliest GW with future matches (Season 2025)"""
+    [cite_start]"""Strict Future Mode [cite: 8]"""
     if results_df.empty: return "GW1"
     now_jst = datetime.datetime.now(JST)
     if 'dt_jst' not in results_df.columns: results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
     
     season_start = pd.Timestamp("2025-07-01", tz=JST)
-    current_season_matches = results_df[results_df['dt_jst'] >= season_start]
-    if current_season_matches.empty: return "GW1"
+    current_season = results_df[results_df['dt_jst'] >= season_start]
+    if current_season.empty: return "GW1"
 
-    future_matches = current_season_matches[current_season_matches['dt_jst'] > (now_jst - timedelta(hours=4))].sort_values('dt_jst')
-    if not future_matches.empty: return future_matches.iloc[0]['gw']
+    future = current_season[current_season['dt_jst'] > (now_jst - timedelta(hours=4))].sort_values('dt_jst')
+    if not future.empty: return future.iloc[0]['gw']
     
-    past = current_season_matches.sort_values('dt_jst', ascending=False)
+    past = current_season.sort_values('dt_jst', ascending=False)
     if not past.empty: return past.iloc[0]['gw']
     return "GW1"
 
 def check_and_assign_bm(target_gw, bm_log_df, users_df):
-    """Fairness Algorithm for BM Assignment"""
+    [cite_start]"""Fairness Algorithm [cite: 8]"""
     if users_df.empty: return
     nums = "".join([c for c in target_gw if c.isdigit()])
     existing = False
@@ -374,7 +398,6 @@ def sync_api(api_token):
         data = r.json().get('matches', [])
         upserts = []
         for m in data:
-            # Upsert with NULL handling for scores
             upserts.append({
                 "match_id": m['id'], "gw": f"GW{m['matchday']}",
                 "home": m['homeTeam']['name'], "away": m['awayTeam']['name'],
@@ -399,7 +422,7 @@ def main():
 
     # Login
     if 'user' not in st.session_state or not st.session_state['user']:
-        st.markdown("<h2 style='text-align:center;'>🔐 LOGIN</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align:center; opacity:0.8; letter-spacing:2px'>LOGIN</h2>", unsafe_allow_html=True)
         c1, c2, c3 = st.columns([1,2,1])
         with c2:
             u = st.selectbox("User", users['username'].tolist(), label_visibility="collapsed")
@@ -418,10 +441,9 @@ def main():
     role = st.session_state.get('role', 'user')
     token = get_api_token(config)
 
-    # Auto Sync
-    if 'v37_synced' not in st.session_state:
-        with st.spinner("🚀 Syncing..."): sync_api(token)
-        st.session_state['v37_synced'] = True; st.rerun()
+    if 'v38_synced' not in st.session_state:
+        with st.spinner("Syncing..."): sync_api(token)
+        st.session_state['v38_synced'] = True; st.rerun()
 
     target_gw = get_strict_target_gw(results)
     check_and_assign_bm(target_gw, bm_log, users)
@@ -438,17 +460,17 @@ def main():
     gw_locked = False
     
     # Sidebar
-    st.sidebar.markdown(f"## 👤 {me}")
-    st.sidebar.caption(f"Team: {st.session_state.get('team')}")
+    st.sidebar.markdown(f"## {me}")
+    st.sidebar.caption(f"{st.session_state.get('team')}")
     my_stat = stats.get(me, {'balance':0})
     bal = my_stat['balance']
     col = "#4ade80" if bal >= 0 else "#f87171"
     st.sidebar.markdown(f"<div style='font-size:1.8rem; font-weight:800; color:{col}; font-family:monospace'>¥{bal:,}</div>", unsafe_allow_html=True)
     if st.sidebar.button("Logout"): st.session_state['user'] = None; st.rerun()
 
-    t1, t2, t3, t4, t5, t6 = st.tabs(["⚽ MATCHES", "⚡ LIVE", "📈 ANALYTICS", "📜 HISTORY", "🏆 DASHBOARD", "🛠 ADMIN"])
+    t1, t2, t3, t4, t5 = st.tabs(["MATCHES", "LIVE", "HISTORY", "DASHBOARD", "ADMIN"])
 
-    # --- TAB 1: Matches ---
+    # --- TAB 1: MATCHES ---
     with t1:
         c_h1, c_h2 = st.columns([3, 1])
         c_h1.markdown(f"### {target_gw}")
@@ -459,6 +481,7 @@ def main():
             matches = results[results['gw'] == target_gw].copy()
             if not matches.empty:
                 matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
+                # [cite_start]Strict Future Filter [cite: 8]
                 matches = matches[matches['dt_jst'] >= pd.Timestamp("2025-07-01", tz=JST)].sort_values('dt_jst')
                 
                 if not matches.empty:
@@ -466,7 +489,7 @@ def main():
                     lock_time = first_ko - timedelta(minutes=lock_mins)
                     if datetime.datetime.now(JST) >= lock_time:
                         gw_locked = True
-                        st.info(f"🔒 LOCKED")
+                        st.info(f"🔒 LOCKED (Starts: {first_ko.strftime('%H:%M')})")
 
                 for _, m in matches.iterrows():
                     mid = m['match_id']
@@ -477,48 +500,51 @@ def main():
                     od = o_row.iloc[0]['draw'] if not o_row.empty else 0
                     oa = o_row.iloc[0]['away_win'] if not o_row.empty else 0
                     
+                    form_html = get_recent_form_html(f"{m['home']} vs {m['away']}", results, m['dt_jst']) # Pass matchup for context if needed, but func uses names. Fix below.
+                    # Actually get_recent_form_html takes team_name. We need 2 calls.
+                    # Wait, prompt says "Old <- H x A -> New". This implies combined? 
+                    # Definition says: "Old <- 🔵 ❌ ... -> New".
+                    # Let's render two separate form guides or one combined? 
+                    # Usually Form Guide is per team. V3.8 def says: "戦績表示... 順序... 左が古い".
+                    # Let's render Home Form and Away Form separately in the grid.
                     form_h = get_recent_form_html(m['home'], results, m['dt_jst'])
                     form_a = get_recent_form_html(m['away'], results, m['dt_jst'])
                     
                     match_bets = bets[bets['match_id'] == mid] if not bets.empty else pd.DataFrame()
                     my_bet = match_bets[match_bets['user'] == me] if not match_bets.empty else pd.DataFrame()
                     
-                    # Safe Score Display
                     h_s = int(m['home_score']) if pd.notna(m['home_score']) else 0
                     a_s = int(m['away_score']) if pd.notna(m['away_score']) else 0
                     score_disp = f"{h_s}-{a_s}" if m['status'] != 'SCHEDULED' else "vs"
 
-                    # Card Top (HTML)
+                    # Card Top
                     card_html = f"""<div class="app-card-top"><div class="card-header"><span>⏱ {dt_str}</span><span>{m['status']}</span></div><div class="matchup-grid"><div class="team-col"><span class="team-name">{m['home']}</span>{form_h}</div><div class="team-col"><span class="score-box">{score_disp}</span></div><div class="team-col"><span class="team-name">{m['away']}</span>{form_a}</div></div><div class="info-row"><div class="odds-item"><div class="odds-label">HOME</div><div class="odds-value">{oh if oh else '-'}</div></div><div class="odds-item"><div class="odds-label">DRAW</div><div class="odds-value">{od if od else '-'}</div></div><div class="odds-item"><div class="odds-label">AWAY</div><div class="odds-value">{oa if oa else '-'}</div></div></div>"""
+                    
                     if not match_bets.empty:
                         badges = ""
                         for _, b in match_bets.iterrows():
                             me_cls = "me" if b['user'] == me else ""
-                            pick_txt = b['pick'][:4] # Shorten
+                            pick_txt = b['pick'][:4]
                             badges += f"""<div class="bet-badge {me_cls}"><span>{b['user']}:</span><span class="bb-pick">{pick_txt}</span></div>"""
                         card_html += f"""<div class="social-bets-container">{badges}</div>"""
                     card_html += "</div>"
                     st.markdown(card_html, unsafe_allow_html=True)
 
-                    # Card Bottom (Form)
+                    # Card Bottom
                     is_open = m['status'] not in ['IN_PLAY', 'FINISHED', 'PAUSED'] and oh > 0 and not gw_locked
-                    
                     if not is_open:
                         msg = "CLOSED"
                         if oh == 0: msg = "WAITING ODDS"
                         elif gw_locked: msg = "LOCKED"
-                        st.markdown(f"<div class='status-msg'>{msg}</div>", unsafe_allow_html=True)
-                    elif is_bm:
-                         st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
+                        st.markdown(f"<div class='status-msg'>{msg}</div><div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
+                    elif is_bm: st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
                     else:
                         with st.form(key=f"bf_{mid}"):
                             c_p, c_s, c_b = st.columns([3, 2, 2])
                             cur_p = my_bet.iloc[0]['pick'] if not my_bet.empty else "HOME"
                             cur_s = int(my_bet.iloc[0]['stake']) if not my_bet.empty else 1000
-                            
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
-                            
                             if c_b.form_submit_button("BET", use_container_width=True):
                                 to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
                                 pl = {"key": f"{m['gw']}:{me}:{mid}", "gw": m['gw'], "user": me, "match_id": mid, "match": f"{m['home']} vs {m['away']}", "pick": pick, "stake": stake, "odds": to, "placed_at": datetime.datetime.now(JST).isoformat(), "status": "OPEN", "result": ""}
@@ -527,7 +553,7 @@ def main():
             else: st.info(f"No matches for {target_gw}")
         else: st.info("Loading...")
 
-    # --- TAB 2: Live ---
+    # --- TAB 2: LIVE ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH", use_container_width=True): sync_api(token); st.rerun()
@@ -537,8 +563,8 @@ def main():
             for i, r in live_df.iterrows():
                 diff = r['LiveDiff']
                 diff_str = f"+¥{diff:,}" if diff > 0 else (f"¥{diff:,}" if diff < 0 else "-")
-                d_cls = "diff-plus" if diff > 0 else ("diff-minus" if diff < 0 else "")
-                st.markdown(f"""<div style="display:flex; justify-content:space-between; padding:12px; background:rgba(255,255,255,0.03); margin-bottom:4px; border-radius:6px; align-items:center"><div style="font-weight:bold; font-size:1.1rem; color:#fbbf24; width:30px">{i+1}</div><div style="flex:1; font-weight:bold;">{r['User']}</div><div style="text-align:right;"><div style="font-weight:bold; font-family:monospace">¥{int(r['Total']):,}</div><div style="font-size:0.8rem; color:{'#4ade80' if diff>0 else '#f87171'}">({diff_str})</div></div></div>""", unsafe_allow_html=True)
+                col = "#4ade80" if diff > 0 else ("#f87171" if diff < 0 else "#666")
+                st.markdown(f"""<div style="display:flex; justify-content:space-between; padding:12px; background:rgba(255,255,255,0.03); margin-bottom:4px; border-radius:6px; align-items:center"><div style="font-weight:bold; font-size:1.1rem; color:#fbbf24; width:30px">{i+1}</div><div style="flex:1; font-weight:bold;">{r['User']}</div><div style="text-align:right;"><div style="font-weight:bold; font-family:monospace">¥{int(r['Total']):,}</div><div style="font-size:0.8rem; color:{col}; font-family:monospace">({diff_str})</div></div></div>""", unsafe_allow_html=True)
         
         st.markdown("#### SCOREBOARD")
         if not results.empty:
@@ -546,9 +572,8 @@ def main():
             lm['dt_jst'] = lm['utc_kickoff'].apply(to_jst)
             lm = lm.sort_values('dt_jst')
             for _, m in lm.iterrows():
-                h_s = int(m['home_score']) if pd.notna(m['home_score']) else 0
-                a_s = int(m['away_score']) if pd.notna(m['away_score']) else 0
-                sts_cls = "live-inplay" if m['status'] in ['IN_PLAY', 'PAUSED'] else ""
+                sts_disp = m['status']
+                if m['status'] in ['IN_PLAY', 'PAUSED']: sts_disp = f"<span class='live-dot'>●</span> {m['status']}"
                 
                 mb = bets[bets['match_id'] == m['match_id']] if not bets.empty else pd.DataFrame()
                 stake_str = ""
@@ -558,52 +583,25 @@ def main():
                     stake_str = " ".join(parts)
 
                 st.markdown(f"""
-                <div style="padding:12px; background:rgba(255,255,255,0.02); margin-bottom:8px; border-radius:8px; border:1px solid rgba(255,255,255,0.05)">
+                <div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05)">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div style="flex:1; text-align:right; font-size:0.9rem; color:#ddd">{m['home']}</div>
-                        <div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.2rem">{h_s}-{a_s}</div>
-                        <div style="flex:1; font-size:0.9rem; color:#ddd">{m['away']}</div>
+                        <div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div>
+                        <div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div>
+                        <div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div>
                     </div>
-                    <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.7rem; color:#666; text-transform:uppercase">
-                        <span class="{sts_cls}">{m['status']}</span>
+                    <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase">
+                        <span>{sts_disp}</span>
                         <span>{stake_str}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
 
-    # --- TAB 3: Analytics ---
+    # --- TAB 3: HISTORY ---
     with t3:
-        st.markdown("### 📈 ANALYTICS")
-        if not bets.empty:
-            settled_bets = bets[bets['result'].isin(['WIN', 'LOSE'])].copy()
-            if not settled_bets.empty:
-                st.markdown("#### Team Affinity")
-                analysis_data = []
-                for _, b in settled_bets.iterrows():
-                    m_row = results[results['match_id'] == b['match_id']]
-                    if not m_row.empty:
-                        m = m_row.iloc[0]
-                        target_team = m['home'] if b['pick'] == 'HOME' else (m['away'] if b['pick'] == 'AWAY' else 'Draw')
-                        if target_team != 'Draw':
-                            analysis_data.append({'User': b['user'], 'Team': target_team, 'Result': 1 if b['result'] == 'WIN' else 0})
-                
-                if analysis_data:
-                    df_an = pd.DataFrame(analysis_data).groupby(['User', 'Team']).mean().reset_index()
-                    chart = alt.Chart(df_an).mark_rect().encode(
-                        x='User:N', y='Team:N',
-                        color=alt.Color('Result:Q', scale=alt.Scale(scheme='darkgreen'), title='Win Rate'),
-                        tooltip=['User', 'Team', alt.Tooltip('Result', format='.0%')]
-                    ).properties(height=500).configure_view(stroke='transparent').configure_axis(labelColor='#aaa', titleColor='#aaa').configure_legend(labelColor='#aaa', titleColor='#aaa')
-                    st.altair_chart(chart, use_container_width=True)
-            else: st.info("Not enough data.")
-        else: st.info("No data.")
-
-    # --- TAB 4: History ---
-    with t4:
         if not bets.empty:
             c1, c2 = st.columns(2)
-            sel_u = c1.selectbox("Filter User", ["All"] + list(users['username'].unique()))
-            sel_g = c2.selectbox("Filter GW", ["All"] + sorted(list(bets['gw'].unique()), key=lambda x: int("".join([c for c in str(x) if c.isdigit()] or 0)), reverse=True))
+            sel_u = c1.selectbox("User", ["All"] + list(users['username'].unique()))
+            sel_g = c2.selectbox("GW", ["All"] + sorted(list(bets['gw'].unique()), key=lambda x: int("".join([c for c in str(x) if c.isdigit()] or 0)), reverse=True))
             hist = bets.copy()
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
@@ -613,41 +611,68 @@ def main():
             for _, b in hist.iterrows():
                 res = b['result'] if b['result'] else "OPEN"
                 cls = "h-win" if res == 'WIN' else ("h-lose" if res == 'LOSE' else "")
-                pnl_val = (b['stake']*b['odds'])-b['stake'] if res == 'WIN' else -b['stake']
-                pnl = f"+¥{int(pnl_val):,}" if res == 'WIN' else (f"-¥{int(b['stake']):,}" if res=='LOSE' else "PENDING")
+                pnl = f"+¥{int((b['stake']*b['odds'])-b['stake']):,}" if res == 'WIN' else (f"-¥{int(b['stake']):,}" if res=='LOSE' else "PENDING")
                 col = "#4ade80" if res=='WIN' else ("#f87171" if res=='LOSE' else "#aaa")
                 
                 st.markdown(f"""
                 <div class="hist-card {cls}">
-                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:#aaa; margin-bottom:4px; text-transform:uppercase">
+                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace">
                         <span>{b['user']} | {b['gw']}</span>
-                        <span style="color:{col}; font-weight:bold; font-family:monospace">{pnl}</span>
+                        <span style="color:{col}; font-weight:bold;">{pnl}</span>
                     </div>
                     <div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{b['match']}</div>
-                    <div style="font-size:0.8rem; color:#ddd">
+                    <div style="font-size:0.8rem; opacity:0.8">
                         <span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> 
-                        <span style="color:#666">(@{b['odds']})</span>
+                        <span style="opacity:0.6">(@{b['odds']})</span>
                         <span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
         else: st.info("No history.")
 
-    # --- TAB 5: Dashboard ---
-    with t5:
-        st.markdown("#### BM Stats")
+    # --- TAB 4: DASHBOARD ---
+    with t4:
+        # [cite_start]Consolidated Dashboard [cite: 9]
+        st.markdown("### 🏆 DASHBOARD")
+        
+        # 1. Main KPI
+        my_s = stats.get(me, {'balance':0, 'wins':0, 'total':0})
+        win_rate = (my_s['wins']/my_s['total']*100) if my_s['total'] else 0
+        c1, c2, c3 = st.columns(3)
+        with c1: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>WIN RATE</div><div class='kpi-val'>{win_rate:.1f}%</div></div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>PROFIT</div><div class='kpi-val'>¥{my_s['balance']:,}</div></div>", unsafe_allow_html=True)
+        with c3: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>GW</div><div class='kpi-val'>{target_gw}</div></div>", unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # [cite_start]2. Profitable Clubs (TOP 3) [cite: 8]
+        st.markdown("#### 💰 PROFITABLE CLUBS")
+        prof_data = calculate_profitable_clubs(bets, results)
+        if prof_data:
+            c_cols = st.columns(len(prof_data))
+            for i, (u, clubs) in enumerate(prof_data.items()):
+                with c_cols[i]:
+                    st.markdown(f"**{u}**")
+                    if clubs:
+                        for j, (team, amt) in enumerate(clubs):
+                            st.markdown(f"<div class='rank-list-item'><span class='rank-pos'>{j+1}.</span> <span style='flex:1'>{team}</span> <span style='color:#4ade80'>+¥{amt:,}</span></div>", unsafe_allow_html=True)
+                    else:
+                        st.caption("No wins yet.")
+        else:
+            st.info("No profitable data available yet.")
+
+        st.markdown("---")
+
+        # 3. BM Fairness
+        st.markdown("#### ⚖️ BM STATS")
         if not bm_log.empty:
             bm_counts = bm_log['bookmaker'].value_counts().reset_index()
             bm_counts.columns = ['User', 'Count']
-            st.bar_chart(bm_counts.set_index('User'))
-        
-        st.markdown("#### Leaderboard")
-        ranking = []
-        for u, s in stats.items(): ranking.append({'User': u, 'Balance': s['balance'], 'Wins': s['wins']})
-        st.dataframe(pd.DataFrame(ranking).sort_values('Balance', ascending=False), use_container_width=True, hide_index=True)
+            for _, r in bm_counts.iterrows():
+                st.markdown(f"<div class='rank-list-item'><span style='flex:1'>{r['User']}</span> <span style='font-weight:bold'>{r['Count']} times</span></div>", unsafe_allow_html=True)
 
-    # --- TAB 6: Admin ---
-    with t6:
+    # --- TAB 5: ADMIN ---
+    with t5:
         if role == 'admin':
             st.markdown("#### ODDS EDITOR")
             with st.expander("📝 Update Odds", expanded=True):
