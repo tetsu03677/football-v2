@@ -9,58 +9,37 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (Theme Lock & Responsive)
+# 0. System Configuration & CSS (Native Dark Mode via config.toml)
 # ==============================================================================
-st.set_page_config(page_title="Football App V3.9", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V4.0", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
-# Ultimate CSS: Theme Locking & Mobile Robustness
+# Clean CSS: Focus only on Layout & Glassmorphism. Colors are handled by config.toml.
 st.markdown("""
 <style>
-    /* --- 1. Theme Locking (Force Dark Mode) --- */
-    /* Main App Background */
-    .stApp {
-        background-color: #0e1117 !important;
-        color: #fafafa !important;
-    }
-    
-    /* Input Widgets (Force Dark Background to prevent white glare) */
-    .stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"] {
-        background-color: #262730 !important;
-        color: #fafafa !important;
-        border: 1px solid rgba(255,255,255,0.1) !important;
-    }
-    /* Dropdown Menu */
-    ul[data-baseweb="menu"] {
-        background-color: #262730 !important;
-    }
-    /* Labels & Text */
-    p, label, .stMarkdown, h1, h2, h3 {
-        color: #e5e7eb !important;
-    }
-
-    /* --- 2. Layout & Spacing --- */
+    /* --- Layout --- */
     .block-container {
         padding-top: 3rem;
-        padding-bottom: 5rem;
+        padding-bottom: 6rem;
         max-width: 100%;
         padding-left: 0.5rem;
         padding-right: 0.5rem;
     }
 
-    /* --- 3. Vertical Card Integration (Glassmorphism) --- */
-    /* Top HTML Part */
+    /* --- Vertical Card Integration (Glassmorphism) --- */
+    /* Top HTML Part: Uses transparency to blend with native dark background */
     .app-card-top {
-        border: 1px solid rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.1);
         border-bottom: none;
         border-radius: 12px 12px 0 0;
         padding: 20px 16px 10px 16px;
-        background: rgba(255,255,255,0.03);
+        background: rgba(255,255,255,0.03); 
         margin-bottom: 0px;
     }
-    /* Bottom Form Part */
+    
+    /* Bottom Form Part: Seamless connection */
     [data-testid="stForm"] {
-        border: 1px solid rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.1);
         border-top: none;
         border-radius: 0 0 12px 12px;
         padding: 0 16px 20px 16px;
@@ -68,15 +47,14 @@ st.markdown("""
         margin-bottom: 24px;
     }
 
-    /* --- 4. Responsive Match Card (Flexbox Strategy) --- */
+    /* --- Responsive Match Card (Flexbox) --- */
     .card-header {
         display: flex; justify-content: space-between;
-        font-family: 'Courier New', monospace; font-size: 0.75rem; opacity: 0.6;
+        font-family: 'Courier New', monospace; font-size: 0.75rem; opacity: 0.7;
         border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; margin-bottom: 16px;
         letter-spacing: 1px;
     }
     
-    /* Robust Flex Layout for Team Names */
     .matchup-flex {
         display: flex;
         align-items: center;
@@ -86,10 +64,10 @@ st.markdown("""
         margin-bottom: 16px;
     }
     
-    /* Equal Width Columns: Forces long names to wrap/shrink, keeping center stable */
+    /* Equal Width Columns for Teams */
     .team-col {
         flex: 1;
-        width: 0; /* Critical for text-overflow behavior */
+        width: 0; /* Forces wrapping/shrinking */
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -98,37 +76,35 @@ st.markdown("""
     
     .team-name { 
         font-weight: 700; font-size: 1.0rem; line-height: 1.2; 
-        min-height: 2.4em; /* Reserve height for 2 lines */
+        min-height: 2.4em;
         display:flex; align-items:center; justify-content:center;
         word-wrap: break-word; overflow-wrap: break-word;
     }
     
     /* Center Score */
-    .score-col {
-        flex: 0 0 auto; /* Do not grow or shrink */
-    }
+    .score-col { flex: 0 0 auto; }
     .score-box { 
         font-family: 'Courier New', monospace; font-size: 1.6rem; font-weight: 800; 
         padding: 4px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; letter-spacing: 2px;
     }
     
-    /* Media Query for Mobile Font Sizing */
+    /* Mobile Adjustments */
     @media (max-width: 600px) {
         .team-name { font-size: 0.9rem; }
         .score-box { font-size: 1.4rem; padding: 2px 8px; }
     }
 
-    /* --- 5. Form Guide (Old -> New) --- */
+    /* --- Form Guide (Old -> New) --- */
     .form-container { 
         display: flex; align-items: center; justify-content: center; 
         gap: 4px; margin-top: 8px; opacity: 0.8; 
     }
-    .form-arrow { font-size: 0.5rem; opacity: 0.4; text-transform: uppercase; margin: 0 2px; letter-spacing: 1px; }
+    .form-arrow { font-size: 0.5rem; opacity: 0.5; text-transform: uppercase; margin: 0 2px; letter-spacing: 1px; }
     .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; margin: 0 1px;}
-    .form-ha { font-size: 0.5rem; opacity: 0.4; font-weight: bold; margin-bottom: 2px; }
-    .form-mark { font-size: 0.7rem; font-weight: bold; } /* Using text dots instead of emojis if preferred, or icons */
+    .form-ha { font-size: 0.5rem; opacity: 0.5; font-weight: bold; margin-bottom: 2px; }
+    .form-mark { font-size: 0.7rem; font-weight: bold; } 
     
-    /* --- 6. Odds & Info --- */
+    /* --- Info Row --- */
     .info-row {
         display: flex; justify-content: space-around; background: rgba(0,0,0,0.2);
         padding: 10px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px;
@@ -136,7 +112,7 @@ st.markdown("""
     .odds-label { font-size: 0.6rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; }
     .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
 
-    /* --- 7. Social Badges --- */
+    /* --- Social Badges --- */
     .social-bets-container { 
         display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
         padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);
@@ -149,16 +125,10 @@ st.markdown("""
     .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); color: #fff; }
     .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
 
-    /* --- 8. Live & Status --- */
-    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
-    .live-dot { color: #f87171; animation: pulse 1.5s infinite; font-weight: bold; margin-right:4px; font-size: 1.2rem; line-height: 0; vertical-align: middle;}
-    .status-msg { text-align: center; opacity: 0.4; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 2px; margin-top: 12px; }
-    .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; }
-
-    /* --- 9. Dashboard (Typography) --- */
+    /* --- Dashboard & Status --- */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
     .kpi-label { font-size: 0.65rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px;}
-    .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; color: #fff; line-height: 1; }
+    .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; line-height: 1; }
     
     .rank-list-item { 
         display: flex; justify-content: space-between; padding: 12px 0; 
@@ -167,12 +137,19 @@ st.markdown("""
     .rank-pos { color: #fbbf24; font-weight: bold; margin-right: 12px; }
     .prof-amt { color: #4ade80; font-weight: bold; }
 
-    /* --- 10. History --- */
+    .status-msg { text-align: center; opacity: 0.5; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 12px; }
+    .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; }
+
+    /* --- Live Pulse --- */
+    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+    .live-dot { color: #f87171; animation: pulse 1.5s infinite; font-weight: bold; margin-right:4px; font-size: 1.2rem; line-height: 0; vertical-align: middle;}
+
+    /* --- History --- */
     .hist-card { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
 
-    /* Clean up */
+    /* Hide Brand */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -263,7 +240,7 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     # Reverse to make it Old -> New
     past = past.iloc[::-1]
 
-    # Build HTML string (No newlines for Streamlit compatibility)
+    # Build HTML string (No newlines)
     html_parts = ['<div class="form-container"><span class="form-arrow">OLD</span>']
     for _, g in past.iterrows():
         is_home = (g['home'] == team_name)
@@ -272,7 +249,6 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
         h = int(g['home_score']) if pd.notna(g['home_score']) else 0
         a = int(g['away_score']) if pd.notna(g['away_score']) else 0
         
-        # Typography based icons
         icon = '<span style="color:#f87171">●</span>' # Lose
         if h == a: icon = '<span style="color:#9ca3af">●</span>' # Draw
         elif (is_home and h > a) or (not is_home and a > h): icon = '<span style="color:#4ade80">●</span>' # Win
@@ -299,8 +275,8 @@ def calculate_stats(bets_df, bm_log_df, users_df):
         user = b['user']
         if user not in stats: continue
         res = str(b.get('result', '')).upper()
-        
         is_settled = (res in ['WIN', 'LOSE'])
+        
         stake = float(b['stake']) if b['stake'] else 0
         odds = float(b['odds']) if b['odds'] else 1.0
         
@@ -352,7 +328,7 @@ def calculate_profitable_clubs(bets_df, results_df):
     return final_ranking
 
 def calculate_live_pnl(bets_df, results_df, bm_map, users_df, target_gw):
-    """Live P&L Simulation"""
+    """Live P&L"""
     base_stats, _ = calculate_stats(bets_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
     live_data = []
 
@@ -485,9 +461,9 @@ def main():
     role = st.session_state.get('role', 'user')
     token = get_api_token(config)
 
-    if 'v39_synced' not in st.session_state:
+    if 'v40_synced' not in st.session_state:
         with st.spinner("Syncing..."): sync_api(token)
-        st.session_state['v39_synced'] = True; st.rerun()
+        st.session_state['v40_synced'] = True; st.rerun()
 
     target_gw = get_strict_target_gw(results)
     check_and_assign_bm(target_gw, bm_log, users)
@@ -525,6 +501,7 @@ def main():
             matches = results[results['gw'] == target_gw].copy()
             if not matches.empty:
                 matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
+                # Strict Future Filter
                 matches = matches[matches['dt_jst'] >= pd.Timestamp("2025-07-01", tz=JST)].sort_values('dt_jst')
                 
                 if not matches.empty:
@@ -554,7 +531,8 @@ def main():
                     score_disp = f"{h_s}-{a_s}" if m['status'] != 'SCHEDULED' else "vs"
 
                     # Card Top (HTML)
-                    card_html = f"""<div class="app-card-top"><div class="card-header"><span>⏱ {dt_str}</span><span>{m['status']}</span></div><div class="matchup-flex"><div class="team-col"><span class="team-name">{m['home']}</span>{form_h}</div><div class="score-col"><span class="score-box">{score_disp}</span></div><div class="team-col"><span class="team-name">{m['away']}</span>{form_a}</div></div><div class="info-row"><div class="odds-item"><div class="odds-label">HOME</div><div class="odds-value">{oh if oh else '-'}</div></div><div class="odds-item"><div class="odds-label">DRAW</div><div class="odds-value">{od if od else '-'}</div></div><div class="odds-item"><div class="odds-label">AWAY</div><div class="odds-value">{oa if oa else '-'}</div></div></div>"""
+                    card_html = f"""<div class="app-card-top"><div class="card-header"><span>⏱ {dt_str}</span><span>{m['status']}</span></div><div class="matchup-flex"><div class="team-col"><span class="team-name">{m['home']}</span>{form_h}</div><div class="score-col"><span class="score-box">{score_disp}</span></div><div class="team-col"><span class="team-name">{m['away']}</span>{form_a}</div></div><div class="info-row"><div class="odds-label">HOME <span class="odds-value">{oh if oh else '-'}</span></div><div class="odds-label">DRAW <span class="odds-value">{od if od else '-'}</span></div><div class="odds-label">AWAY <span class="odds-value">{oa if oa else '-'}</span></div></div>"""
+                    
                     if not match_bets.empty:
                         badges = ""
                         for _, b in match_bets.iterrows():
