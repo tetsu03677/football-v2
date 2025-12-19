@@ -51,12 +51,12 @@ st.markdown("""
     font-size: 0.8rem; padding: 4px 8px; border-radius: 4px; background: rgba(255,255,255,0.03); margin-top: 2px;
     display: flex; justify-content: space-between; align-items: center; color: #aaa;
 }
-.bet-hl { color: #fff; font-weight: bold; }
+.bet-hl { color: #fff; font-weight: bold; background: rgba(255,255,255,0.1); }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 1. Database & Config Access
+# 1. Database & Config Access (Safe Fetch)
 # ==============================================================================
 @st.cache_resource
 def get_supabase():
@@ -67,27 +67,34 @@ def get_supabase():
 supabase = get_supabase()
 
 def fetch_all_data():
-    """Fetch all tables safely with schema validation"""
+    """Fetch all tables safely with schema validation to prevent KeyError"""
     try:
-        def get_df(table, cols):
-            res = supabase.table(table).select("*").execute()
-            df = pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=cols)
-            return df
+        def get_df_safe(table, expected_cols):
+            try:
+                res = supabase.table(table).select("*").execute()
+                df = pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=expected_cols)
+                # Ensure all expected columns exist even if empty
+                for col in expected_cols:
+                    if col not in df.columns:
+                        df[col] = None
+                return df
+            except:
+                return pd.DataFrame(columns=expected_cols)
 
-        bets = get_df("bets", ['key','user','match_id','pick','stake','odds','status','result','gw','placed_at'])
-        odds = get_df("odds", ['match_id','home_win','draw','away_win'])
-        results = get_df("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score'])
-        bm_log = get_df("bm_log", ['gw','bookmaker'])
-        users = get_df("users", ['username','password','role','team'])
-        config = get_df("config", ['key','value'])
+        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','status','result','gw','placed_at'])
+        odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
+        results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score'])
+        bm_log = get_df_safe("bm_log", ['gw','bookmaker'])
+        users = get_df_safe("users", ['username','password','role','team'])
+        config = get_df_safe("config", ['key','value'])
         
         return bets, odds, results, bm_log, users, config
     except Exception as e:
-        st.error(f"DB Error: {e}")
+        st.error(f"Critical DB Error: {e}")
         return [pd.DataFrame()]*6
 
 def get_api_token(config_df):
-    # Secrets > Config Table
+    # Secrets priority > Config Table
     token = st.secrets.get("api_token")
     if token: return token
     if not config_df.empty:
@@ -109,10 +116,10 @@ def to_jst(iso_str):
     except: return None
 
 def get_recent_form(team_name, results_df, current_kickoff_jst):
-    """Generate Form Guide (🔵❌▲) based on finished matches before kickoff"""
+    """Generate Form Guide (🔵❌▲) based on finished matches before kickoff (JST)"""
     if results_df.empty: return "-"
     
-    # Ensure JST
+    # Ensure JST column
     if 'dt_jst' not in results_df.columns:
         results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
     
@@ -124,8 +131,7 @@ def get_recent_form(team_name, results_df, current_kickoff_jst):
     ].sort_values('dt_jst', ascending=False).head(5)
     
     icons = []
-    # Loop from oldest to newest for display? Usually newest left. Definition says Left=Newest.
-    # So iterating the DF as is (descending) is correct for Left=Newest.
+    # Left = Newest
     for _, g in past.iterrows():
         is_home = (g['home'] == team_name)
         h = int(g['home_score']) if pd.notna(g['home_score']) else 0
@@ -203,7 +209,8 @@ def determine_current_gw(results_df):
     if results_df.empty: return "GW1"
     
     now_jst = datetime.datetime.now(JST)
-    results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
+    if 'dt_jst' not in results_df.columns:
+        results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
     
     # Matches starting > now - 4 hours
     active = results_df[results_df['dt_jst'] > (now_jst - timedelta(hours=4))].sort_values('dt_jst')
@@ -221,6 +228,7 @@ def determine_current_gw(results_df):
 def sync_api(api_token):
     """Sync API (Season 2025 fixed, Upsert)"""
     if not api_token: return False
+    # ★ Force Season 2025
     url = "https://api.football-data.org/v4/competitions/PL/matches?season=2025"
     headers = {'X-Auth-Token': api_token}
     
@@ -305,8 +313,8 @@ def render_match_card(m, odds_df, bets_df, me, is_bm, results_df):
             u_icon = "🟢" if b['user'] == me else "👤"
             hl_class = "bet-hl" if b['user'] == me else ""
             st.markdown(f"""
-            <div class="bet-row">
-                <span class="{hl_class}">{u_icon} {b['user']}</span>
+            <div class="bet-row {hl_class}">
+                <span style="font-weight:bold">{u_icon} {b['user']}</span>
                 <span>
                     <span style="color:#a5b4fc; margin-right:5px">{b['pick']}</span>
                     <span>¥{int(b['stake']):,}</span>
@@ -346,13 +354,13 @@ def render_match_card(m, odds_df, bets_df, me, is_bm, results_df):
                 # Calc Odds
                 target_odds = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
                 
-                # Upsert Bet
+                # Upsert Bet (JST time for display, but ISO format for DB)
                 key = f"{m['gw']}:{me}:{mid}"
                 payload = {
                     "key": key, "gw": m['gw'], "user": me, "match_id": mid,
                     "match": f"{m['home']} vs {m['away']}",
                     "pick": pick, "stake": stake, "odds": target_odds,
-                    "placed_at": datetime.datetime.now().isoformat(),
+                    "placed_at": datetime.datetime.now(JST).isoformat(), # Use JST for record
                     "status": "OPEN", "result": ""
                 }
                 supabase.table("bets").upsert(payload).execute()
@@ -369,8 +377,9 @@ def main():
     # 1. Load Data
     bets, odds, results, bm_log, users, config = fetch_all_data()
     
-    if users.empty:
-        st.warning("No users found. Please run migration script.")
+    # If users table is empty/failed, prevent crash
+    if users.empty or 'username' not in users.columns:
+        st.warning("User data is not available. Please run the sync script.")
         st.stop()
 
     # 2. Authentication
@@ -442,33 +451,34 @@ def main():
             gw_list = sorted(uniq, key=lambda x: int("".join([c for c in str(x) if c.isdigit()] or 0)))
         
         c_gw, c_bm = st.columns([2, 1])
-        idx = gw_list.index(current_gw) if current_gw in gw_list else 0
-        sel_gw = c_gw.selectbox("Gameweek", gw_list, index=idx, label_visibility="collapsed")
-        
-        # Determine BM for selected GW
-        sel_gw_num = "".join([c for c in sel_gw if c.isdigit()])
-        sel_gw_key = f"GW{sel_gw_num}"
-        gw_bm_name = "Undecided"
-        if not bm_log.empty:
-            # Simple lookup
-            for _, r in bm_log.iterrows():
-                r_num = "".join([c for c in str(r['gw']) if c.isdigit()])
-                if r_num == sel_gw_num: gw_bm_name = r['bookmaker']; break
-        
-        is_bm = (me == gw_bm_name)
-        bm_disp = f"👑 You are BM" if is_bm else f"BM: {gw_bm_name}"
-        c_bm.markdown(f"<div class='bm-badge'>{bm_disp}</div>", unsafe_allow_html=True)
-
-        # Filter Matches (Sort by Time)
-        matches = results[results['gw'] == sel_gw].copy()
-        if not matches.empty:
-            matches['dt'] = matches['utc_kickoff'].apply(to_jst)
-            matches = matches.sort_values('dt')
+        if gw_list:
+            idx = gw_list.index(current_gw) if current_gw in gw_list else 0
+            sel_gw = c_gw.selectbox("Gameweek", gw_list, index=idx, label_visibility="collapsed")
             
-            for _, m in matches.iterrows():
-                render_match_card(m, odds, bets, me, is_bm, results)
+            # Determine BM for selected GW
+            sel_gw_num = "".join([c for c in sel_gw if c.isdigit()])
+            gw_bm_name = "Undecided"
+            if not bm_log.empty:
+                for _, r in bm_log.iterrows():
+                    r_num = "".join([c for c in str(r['gw']) if c.isdigit()])
+                    if r_num == sel_gw_num: gw_bm_name = r['bookmaker']; break
+            
+            is_bm = (me == gw_bm_name)
+            bm_disp = f"👑 You are BM" if is_bm else f"BM: {gw_bm_name}"
+            c_bm.markdown(f"<div class='bm-badge'>{bm_disp}</div>", unsafe_allow_html=True)
+
+            # Filter Matches (Sort by Time JST)
+            matches = results[results['gw'] == sel_gw].copy()
+            if not matches.empty:
+                matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
+                matches = matches.sort_values('dt_jst')
+                
+                for _, m in matches.iterrows():
+                    render_match_card(m, odds, bets, me, is_bm, results)
+            else:
+                st.info("No matches found for this Gameweek.")
         else:
-            st.info("No matches found for this Gameweek.")
+            st.info("No match data available.")
 
     # [TAB 2] Dashboard
     with t2:
@@ -504,6 +514,8 @@ def main():
                 use_container_width=True,
                 hide_index=True
             )
+        else:
+            st.info("No bets found.")
 
     # [TAB 4] Standings
     with t4:
@@ -526,7 +538,8 @@ def main():
             st.markdown("#### 🛠 Admin Tools")
             with st.expander("Assign Bookmaker"):
                 with st.form("bm_assign"):
-                    t_gw = st.selectbox("GW", gw_list, key="admin_gw")
+                    # Use unique list for GW
+                    t_gw = st.selectbox("GW", gw_list if gw_list else ["GW1"], key="admin_gw")
                     t_user = st.selectbox("User", users['username'].tolist(), key="admin_u")
                     if st.form_submit_button("Assign"):
                         supabase.table("bm_log").upsert({
