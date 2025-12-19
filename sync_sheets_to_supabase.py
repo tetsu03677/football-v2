@@ -3,7 +3,7 @@ import gspread
 import pandas as pd
 from supabase import create_client
 
-st.set_page_config(page_title="Shadow Sync Tool", layout="centered")
+st.set_page_config(page_title="Shadow Sync Tool (Fix)", layout="centered")
 st.title("🔄 Shadow Sync (Sheets -> Supabase)")
 
 # --- Init ---
@@ -19,21 +19,29 @@ except Exception as e:
     st.stop()
 
 def clean_data(records, pk_col):
-    """データクリーニングと重複排除"""
+    """
+    データクリーニングと重複排除
+    ★修正点: カラム名(key)の改行コードや空白を除去する処理を追加
+    """
     unique = {}
     for r in records:
         clean_r = {}
         for k, v in r.items():
+            # [Fix] キーのクリーニング ("home\n" -> "home")
+            clean_k = str(k).strip()
+            
+            # 値のクリーニング
+            clean_v = v
             if v == "":
-                clean_r[k] = None
+                clean_v = None
             elif isinstance(v, str) and v.replace(',','').replace('.','').replace('-','').isdigit():
                 if ',' in v:
-                    try: clean_r[k] = float(v.replace(',',''))
-                    except: clean_r[k] = v
+                    try: clean_v = float(v.replace(',',''))
+                    except: clean_v = v
                 else:
-                    clean_r[k] = v
-            else:
-                clean_r[k] = v
+                    clean_v = v
+            
+            clean_r[clean_k] = clean_v
         
         # PKがあれば辞書で上書き（重複排除）
         pk_val = clean_r.get(pk_col)
@@ -48,9 +56,10 @@ def sync_table(sheet_name, table_name, pk_col):
         recs = ws.get_all_records()
         if not recs: return
         
+        # クリーニング実行
         payload = clean_data(recs, pk_col)
         
-        # Upsert
+        # Upsert (100件ずつ)
         chunk = 100
         for i in range(0, len(payload), chunk):
             supabase.table(table_name).upsert(payload[i:i+chunk]).execute()
@@ -79,7 +88,7 @@ if st.button("🚀 Run Sync From Production Sheets", type="primary"):
 
         # 各テーブル同期
         sync_table("config", "config", "key")
-        sync_table("odds", "odds", "match_id")
+        sync_table("odds", "odds", "match_id") # ここでエラーが出ていた
         sync_table("bets", "bets", "key")
         sync_table("bm_log", "bm_log", "gw")
         sync_table("result", "result", "match_id")
