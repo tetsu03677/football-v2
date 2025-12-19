@@ -9,7 +9,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. 初期設定 & CSS
 # ==============================================================================
-st.set_page_config(page_title="Premier Picks V2.2", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Premier Picks V2.3", layout="wide", page_icon="⚽")
 JST = timezone(timedelta(hours=9), 'JST')
 
 st.markdown("""
@@ -24,7 +24,7 @@ st.markdown("""
     margin-bottom: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.2);
 }
 
-/* BMパネル (ダッシュボード用) */
+/* BMパネル */
 .bm-panel {
     border: 1px solid rgba(251, 191, 36, 0.4); border-radius: 12px; padding: 20px;
     background: rgba(251, 191, 36, 0.1); text-align: center; margin-bottom: 20px;
@@ -41,7 +41,7 @@ st.markdown("""
 .kpi-label { font-size: 0.75rem; color: #aaa; }
 .kpi-val { font-size: 1.4rem; font-weight: bold; }
 
-/* 履歴カード (シンプル版) */
+/* 履歴カード */
 .hist-card {
     border-left: 4px solid #555; background: rgba(255,255,255,0.03); 
     padding: 12px; margin-bottom: 8px; border-radius: 4px;
@@ -52,6 +52,10 @@ st.markdown("""
 /* その他 */
 .match-time { font-family: monospace; color: #a5b4fc; font-size: 0.9rem; }
 .status-badge { background: #374151; color: #d1d5db; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; }
+.avatar {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%; font-size: 0.7rem; font-weight: bold; color: white; margin-right: 5px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -67,7 +71,7 @@ def get_supabase():
 supabase = get_supabase()
 
 def fetch_all_data():
-    """全データを一括取得 (キャッシュせず常に最新を推奨)"""
+    """全データを一括取得"""
     try:
         bets = pd.DataFrame(supabase.table("bets").select("*").execute().data)
         odds = pd.DataFrame(supabase.table("odds").select("*").execute().data)
@@ -92,19 +96,18 @@ def get_api_token(config_df):
 # ==============================================================================
 def calculate_stats(bets_df, bm_log_df, users_df):
     """収支計算"""
-    if users_df.empty: return {}
+    if users_df.empty: return {}, {}
     user_stats = {u: {'balance': 0, 'wins': 0, 'total': 0, 'potential': 0} for u in users_df['username'].unique()}
     
     # BMマップ (GW -> User)
     bm_map = {} 
     if not bm_log_df.empty:
         for _, row in bm_log_df.iterrows():
-            # gwカラムが "GW7" でも "7" でも対応
             gw_str = str(row['gw'])
             gw_num = "".join([c for c in gw_str if c.isdigit()])
             if gw_num: bm_map[f"GW{gw_num}"] = row['bookmaker']
 
-    if bets_df.empty: return user_stats
+    if bets_df.empty: return user_stats, bm_map
 
     for _, b in bets_df.iterrows():
         p_user = b['user']
@@ -116,7 +119,6 @@ def calculate_stats(bets_df, bm_log_df, users_df):
         stake = float(b['stake']) if b['stake'] else 0
         odds = float(b['odds']) if b['odds'] else 1.0
         
-        # GW正規化
         gw_raw = str(b['gw'])
         gw_num = "".join([c for c in gw_raw if c.isdigit()])
         gw_key = f"GW{gw_num}"
@@ -146,7 +148,6 @@ def calculate_stats(bets_df, bm_log_df, users_df):
 def determine_current_gw(results_df):
     """
     現在時刻を基準にGWを判定。
-    GW38問題を防ぐため、未来の試合があるGWを優先する。
     """
     if results_df.empty: return "GW1"
     
@@ -154,15 +155,13 @@ def determine_current_gw(results_df):
     results_df['dt'] = pd.to_datetime(results_df['utc_kickoff'], errors='coerce', utc=True)
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     
-    # 1. これから行われる、または現在進行中の試合を探す
-    # (Kickoffが現在 - 4時間 より未来)
+    # 1. これから行われる、または現在進行中の試合 (4時間前以降)
     active = results_df[results_df['dt'] > (now_utc - timedelta(hours=4))].sort_values('dt')
     
     if not active.empty:
         return active.iloc[0]['gw']
     
-    # 2. 未来の試合が全くない場合（シーズン終了など） -> データの最後を採用
-    # ただし、GW38に飛ばないよう、今日の日付に最も近い過去の試合を見る
+    # 2. 未来がない場合、直近の過去の試合
     past = results_df[results_df['dt'] <= now_utc].sort_values('dt', ascending=False)
     if not past.empty:
         return past.iloc[0]['gw']
@@ -170,15 +169,20 @@ def determine_current_gw(results_df):
     return "GW1"
 
 def sync_with_api(api_token):
-    """API同期"""
+    """API同期: Season=2025に変更"""
     if not api_token: return False, "Token missing"
     headers = {'X-Auth-Token': api_token}
-    url = "https://api.football-data.org/v4/competitions/PL/matches?season=2024"
+    
+    # ★重要修正: シーズンを2025に (2025-2026シーズン)
+    url = "https://api.football-data.org/v4/competitions/PL/matches?season=2025"
+    
     try:
         res = requests.get(url, headers=headers)
         if res.status_code != 200: return False, f"API Error {res.status_code}"
         
         matches = res.json().get('matches', [])
+        if not matches: return False, "No matches found (Check Season)"
+        
         upserts = []
         for m in matches:
             upserts.append({
@@ -196,7 +200,7 @@ def sync_with_api(api_token):
         chunk = 100
         for i in range(0, len(upserts), chunk):
             supabase.table("result").upsert(upserts[i:i+chunk]).execute()
-        return True, f"Synced {len(upserts)} matches"
+        return True, f"Synced {len(upserts)} matches (Season 2025)"
     except Exception as e:
         return False, str(e)
 
@@ -206,11 +210,10 @@ def sync_with_api(api_token):
 def main():
     if not supabase: st.error("DB Connection Error"); st.stop()
     
-    # -----------------------------------
-    # 1. ログイン & 初期データロード
-    # -----------------------------------
+    # データロード
     bets, odds, results, bm_log, users, config = fetch_all_data()
     
+    # ログイン
     if 'user' not in st.session_state: st.session_state['user'] = None
     if not st.session_state['user']:
         st.sidebar.title("🔐 Login")
@@ -222,37 +225,26 @@ def main():
             if not user_row.empty and str(user_row.iloc[0]['password']) == pw:
                 st.session_state['user'] = user_row.iloc[0].to_dict()
                 st.rerun()
-            else:
-                st.error("Invalid Login")
+            else: st.error("Invalid Login")
         st.stop()
         
     me = st.session_state['user']
     api_token = get_api_token(config)
 
-    # -----------------------------------
-    # 2. 自動Sync (セッション開始時のみ)
-    # -----------------------------------
+    # 初回自動同期
     if 'auto_synced' not in st.session_state:
-        with st.spinner("🚀 Initializing & Syncing Data..."):
+        with st.spinner("🚀 Initializing Season 2025 Data..."):
             sync_with_api(api_token)
         st.session_state['auto_synced'] = True
-        # データ再取得
-        bets, odds, results, bm_log, users, config = fetch_all_data()
-        st.rerun() # リフレッシュして最新データを表示
+        st.rerun()
 
-    # -----------------------------------
-    # 3. 計算処理
-    # -----------------------------------
+    # 計算
     current_gw = determine_current_gw(results)
     stats, bm_map = calculate_stats(bets, bm_log, users)
     my_stats = stats.get(me['username'], {'balance':0, 'wins':0, 'total':0, 'potential':0})
-    
-    # 現在のBM特定
     current_bm = bm_map.get(current_gw, "未定")
 
-    # -----------------------------------
-    # 4. サイドバー
-    # -----------------------------------
+    # サイドバー
     st.sidebar.markdown(f"## 👤 {me['username']}")
     st.sidebar.caption(f"Team: {me.get('team','-')}")
     st.sidebar.divider()
@@ -275,18 +267,14 @@ def main():
         with st.spinner("Syncing..."):
             sync_with_api(api_token)
         st.rerun()
-        
     if st.sidebar.button("Logout"):
         st.session_state['user'] = None; st.rerun()
 
-    # -----------------------------------
-    # 5. メイン画面 (Tabs)
-    # -----------------------------------
-    tabs = st.tabs(["📊 Dashboard", "⚽ Matches", "📜 History", "🏆 Standings"])
+    # タブ
+    tabs = st.tabs(["📊 Dashboard", "⚽ Matches", "📜 History", "🏆 Standings", "🛠 Admin"])
     
     # [1] Dashboard
     with tabs[0]:
-        # BMパネル (ご要望の視覚的明示)
         st.markdown(f"""
         <div class="bm-panel">
             <div class="bm-label"><span class="gw-tag">{current_gw}</span>BOOKMAKER</div>
@@ -294,7 +282,6 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        st.markdown(f"#### 👋 Hi, {me['username']}")
         win_rate = (my_stats['wins'] / my_stats['total'] * 100) if my_stats['total'] else 0
         c1, c2, c3 = st.columns(3)
         with c1: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>Win Rate</div><div class='kpi-val'>{win_rate:.1f}%</div></div>", unsafe_allow_html=True)
@@ -303,7 +290,6 @@ def main():
 
     # [2] Matches
     with tabs[1]:
-        # GW選択 (数値順)
         gw_list = []
         if not results.empty:
             gw_unique = results['gw'].unique()
@@ -311,8 +297,6 @@ def main():
         
         idx = gw_list.index(current_gw) if current_gw in gw_list else 0
         sel_gw = st.selectbox("Gameweek", gw_list, index=idx)
-        
-        st.markdown(f"#### {sel_gw} Fixtures")
         
         target_matches = results[results['gw'] == sel_gw].sort_values('utc_kickoff')
         
@@ -324,7 +308,6 @@ def main():
                 kickoff = to_jst_str(m['utc_kickoff'])
                 score = f"{int(m['home_score'])} - {int(m['away_score'])}" if pd.notna(m['home_score']) else ""
                 
-                # オッズ取得
                 o_row = odds[odds['match_id'] == mid]
                 oh = o_row.iloc[0]['home_win'] if not o_row.empty else 0
                 od = o_row.iloc[0]['draw'] if not o_row.empty else 0
@@ -348,20 +331,15 @@ def main():
                                 <div style="color:#4ade80; font-weight:bold">{oa if oa else '-'}</div>
                             </div>
                         </div>
-                        <div style="text-align:center; font-size:1.2rem; font-weight:bold; letter-spacing:2px">
-                            {score}
-                        </div>
+                        <div style="text-align:center; font-size:1.2rem; font-weight:bold; letter-spacing:2px">{score}</div>
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # ベットフォーム
                     if m['status'] not in ['IN_PLAY', 'FINISHED', 'PAUSED']:
-                        if not bets.empty:
-                            my_bet = bets[(bets['match_id'] == mid) & (bets['user'] == me['username'])]
+                        if not bets.empty: my_bet = bets[(bets['match_id'] == mid) & (bets['user'] == me['username'])]
                         else: my_bet = pd.DataFrame()
                         
-                        if not my_bet.empty:
-                            st.info(f"✅ Pick: **{my_bet.iloc[0]['pick']}**")
+                        if not my_bet.empty: st.info(f"✅ Pick: **{my_bet.iloc[0]['pick']}**")
                         elif oh > 0:
                             with st.form(key=f"b_{mid}"):
                                 c1, c2, c3 = st.columns([3, 2, 2])
@@ -381,14 +359,20 @@ def main():
                                     }).execute()
                                     st.success("Bet Placed!"); time.sleep(1); st.rerun()
 
-    # [3] History (Simple Cards)
+    # [3] History (Filtered)
     with tabs[2]:
-        st.markdown("#### Betting History (My Bets)")
+        st.markdown("#### Betting History")
+        
+        # フィルター追加
+        u_options = ["All"] + users['username'].tolist()
+        sel_user = st.selectbox("Filter User", u_options, index=0)
+        
         if not bets.empty:
-            # 自分のベットのみに絞る（シンプル化）
-            my_hist = bets[bets['user'] == me['username']].sort_values('placed_at', ascending=False)
+            hist = bets.sort_values('placed_at', ascending=False)
+            if sel_user != "All":
+                hist = hist[hist['user'] == sel_user]
             
-            for _, b in my_hist.iterrows():
+            for _, b in hist.iterrows():
                 res = b['result'] if b['result'] else "PENDING"
                 cls = "hist-card"
                 pnl_str = "PENDING"
@@ -401,20 +385,28 @@ def main():
                     cls += " hist-lose"
                     pnl_str = f"-{fmt_yen(b['stake'])}"
                 
+                # アバター
+                av_col = "#3b82f6"
+                if b['user'] == 'Toshiya': av_col = "#ef4444"
+                elif b['user'] == 'Koki': av_col = "#fbbf24"
+                
                 st.markdown(f"""
                 <div class="{cls}">
                     <div style="display:flex; justify-content:space-between; margin-bottom:4px">
-                        <span style="font-size:0.8rem; color:#aaa">{to_jst_str(b['placed_at'])} | {b['gw']}</span>
+                        <div style="display:flex; align-items:center">
+                            <div class="avatar" style="background:{av_col}">{b['user'][0]}</div>
+                            <span style="font-size:0.8rem; color:#aaa">{to_jst_str(b['placed_at'])}</span>
+                        </div>
                         <span style="font-weight:bold">{pnl_str}</span>
                     </div>
-                    <div style="font-weight:bold; font-size:1rem">{b['match']}</div>
-                    <div style="margin-top:4px">
-                        Picked: <span style="font-weight:bold">{b['pick']}</span> <span style="font-size:0.9rem">(@{b['odds']})</span>
+                    <div style="font-weight:bold; font-size:1rem; margin-top:4px">{b['match']}</div>
+                    <div style="margin-top:2px; font-size:0.9rem">
+                        <span style="background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px">{b['pick']}</span> 
+                        <span style="color:#aaa">(@{b['odds']})</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-        else:
-            st.info("No history yet.")
+        else: st.info("No history.")
 
     # [4] Standings
     with tabs[3]:
@@ -428,6 +420,23 @@ def main():
                 <div style="font-weight:bold; color:{'#4ade80' if r['balance']>=0 else '#f87171'}">{fmt_yen(r['balance'])}</div>
             </div>
             """, unsafe_allow_html=True)
+
+    # [5] Admin (BM Assign)
+    with tabs[4]:
+        if me['role'] == 'admin':
+            st.markdown("#### 🛠 Bookmaker Assignment")
+            with st.form("bm_assign"):
+                target_gw = st.selectbox("Target GW", gw_list)
+                target_user = st.selectbox("Assign User", users['username'].tolist())
+                if st.form_submit_button("Assign"):
+                    supabase.table("bm_log").upsert({
+                        "gw": target_gw,
+                        "gw_number": int(target_gw.replace("GW","")),
+                        "bookmaker": target_user,
+                        "decided_at": datetime.datetime.now().isoformat()
+                    }).execute()
+                    st.success(f"Assigned {target_user} to {target_gw}")
+                    time.sleep(1); st.rerun()
 
 # Utils
 def to_jst_str(iso_str):
