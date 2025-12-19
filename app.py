@@ -1,176 +1,211 @@
 import streamlit as st
-import gspread
 import pandas as pd
+import requests
+import datetime
 from supabase import create_client
 
-# --- 設定 ---
-st.set_page_config(page_title="Data Migration Final", layout="wide")
-st.title("🚀 Football App - データ移行 (完全版)")
+# --- 基本設定 ---
+st.set_page_config(page_title="Premier Picks V2", page_icon="⚽", layout="wide")
 
-# --- 接続確立 ---
-try:
-    if "supabase" in st.secrets:
-        supabase = create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["key"])
-        st.success("✅ Supabase 接続成功")
-    else:
-        st.error("Supabase secrets missing")
-        st.stop()
-        
-    if "gcp_service_account" in st.secrets:
-        gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
-        sh = gc.open_by_key(st.secrets["sheets"]["sheet_id"])
-        st.success("✅ Google Sheets 接続成功")
-    else:
-        st.error("Google Sheets secrets missing")
-        st.stop()
-except Exception as e:
-    st.error(f"接続エラー: {e}")
-    st.stop()
+# API設定 (Football-Data.org)
+API_URL = 'https://api.football-data.org/v4/competitions/PL/matches'
+SEASON_STR = "2024-2025"
 
-# --- ユーティリティ関数 ---
-def find_sheet_by_columns(sh, keywords):
-    """指定したキーワードを含む列を持つシートを探す"""
-    for ws in sh.worksheets():
+# --- データベース接続 ---
+@st.cache_resource
+def init_connection():
+    try:
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["key"]
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Supabase接続エラー: {e}")
+        return None
+
+supabase = init_connection()
+
+# --- 機能: APIから最新日程を取得してDB更新 ---
+def sync_matches_from_api():
+    # Secretsからトークン取得 (旧アプリの書き方に合わせる)
+    token = st.secrets.get("api_token") or st.secrets.get("X-Auth-Token")
+    
+    if not token:
+        st.warning("⚠️ APIトークンが見つかりません。Secretsに 'api_token' を設定すると、試合日程を自動更新できます。")
+        return
+
+    headers = {'X-Auth-Token': token}
+    with st.spinner("APIから最新の試合情報を取得中..."):
         try:
-            # ヘッダー行を取得して小文字化・空白除去
-            headers = [str(h).lower().strip() for h in ws.row_values(1)]
-            # 全キーワードが含まれているかチェック
-            if all(any(k in h for h in headers) for k in keywords):
-                return ws
-        except:
-            continue
-    return None
-
-def to_int_or_none(val):
-    """空文字や不正な値を None に変換する安全装置"""
-    if val == "" or val is None:
-        return None
-    try:
-        # "1.0" のような文字列も一度floatにしてからintにする
-        return int(float(val))
-    except:
-        return None
-
-def to_float_or_default(val, default=1.0):
-    try:
-        return float(val)
-    except:
-        return default
-
-# --- メイン移行処理 ---
-if st.button("🚀 移行実行 (最終修正版)"):
-    status_log = st.empty()
-    
-    # ---------------------------------------------------------
-    # 1. 試合データ (oddsシート相当)
-    # ---------------------------------------------------------
-    status_log.info("1/4: 試合データ(odds)を処理中...")
-    ws_odds = find_sheet_by_columns(sh, ["match_id", "home", "away"])
-    
-    if not ws_odds:
-        st.error("❌ 'odds' 相当のシートが見つかりません (match_id, home, away)")
-        st.stop()
-        
-    odds_data = ws_odds.get_all_records()
-    matches_payload = {} 
-
-    for row in odds_data:
-        mid = to_int_or_none(row.get("match_id"))
-        if not mid:
-            continue # IDがない行はスキップ
-        
-        # 'home\n' など表記揺れ対応
-        home = row.get("home") or row.get("home\n") or row.get("Home") or "Unknown"
-        away = row.get("away") or row.get("Away") or "Unknown"
-        
-        matches_payload[mid] = {
-            "match_id": mid,
-            "season": "2024-2025",
-            "gameweek": to_int_or_none(row.get("gw")),
-            "home_team": str(home).strip(),
-            "away_team": str(away).strip(),
-            "status": "FINISHED", # 過去データは完了扱い
-            "home_score": None,
-            "away_score": None
-        }
-
-    # ---------------------------------------------------------
-    # 2. 試合結果 (resultシート相当)
-    # ---------------------------------------------------------
-    status_log.info("2/4: 試合結果(result)をマージ中...")
-    ws_result = find_sheet_by_columns(sh, ["match_id", "home_score", "away_score"])
-    
-    if ws_result:
-        res_data = ws_result.get_all_records()
-        for row in res_data:
-            mid = to_int_or_none(row.get("match_id"))
-            if mid in matches_payload:
-                matches_payload[mid]["home_score"] = to_int_or_none(row.get("home_score"))
-                matches_payload[mid]["away_score"] = to_int_or_none(row.get("away_score"))
-    
-    # 試合データ送信
-    if matches_payload:
-        data_list = list(matches_payload.values())
-        chunk_size = 100
-        for i in range(0, len(data_list), chunk_size):
-            chunk = data_list[i:i + chunk_size]
-            supabase.table("matches").upsert(chunk).execute()
-        st.write(f"✅ 試合データ移行完了: {len(matches_payload)}件")
-    
-    # ---------------------------------------------------------
-    # 3. ユーザー抽出 (betsシート相当)
-    # ---------------------------------------------------------
-    status_log.info("3/4: ユーザーを抽出中...")
-    ws_bets = find_sheet_by_columns(sh, ["user", "pick", "stake"])
-    
-    if not ws_bets:
-        st.error("❌ 'bets' 相当のシートが見つかりません")
-        st.stop()
-        
-    bets_data = ws_bets.get_all_records()
-    unique_users = set()
-    
-    for row in bets_data:
-        u = row.get("user")
-        if u:
-            unique_users.add(str(u).strip())
-        
-    for u in unique_users:
-        supabase.table("users").upsert({"username": u, "balance": 10000}, on_conflict="username").execute()
-        
-    # IDマップ作成
-    db_users = supabase.table("users").select("user_id, username").execute().data
-    user_map = {u['username']: u['user_id'] for u in db_users}
-    st.write(f"✅ ユーザー登録完了: {len(unique_users)}名")
-
-    # ---------------------------------------------------------
-    # 4. ベット履歴 (betsシート相当)
-    # ---------------------------------------------------------
-    status_log.info("4/4: ベット履歴を移行中...")
-    
-    bets_payload = []
-    for row in bets_data:
-        u_name = str(row.get("user")).strip()
-        mid = to_int_or_none(row.get("match_id"))
-        
-        if u_name in user_map and mid:
-            # マッチIDが試合データに存在するものだけ対象
-            if mid in matches_payload:
-                bets_payload.append({
-                    "user_id": user_map[u_name],
-                    "match_id": mid,
-                    "choice": str(row.get("pick", "")),
-                    "stake": to_int_or_none(row.get("stake")),
-                    "odds_at_bet": to_float_or_default(row.get("odds")),
-                    "status": "PENDING"
+            # 今シーズンの試合を取得
+            response = requests.get(f"{API_URL}?season=2024", headers=headers)
+            if response.status_code != 200:
+                st.error(f"APIエラー: {response.status_code}")
+                return
+            
+            data = response.json()
+            matches = data.get('matches', [])
+            
+            upsert_list = []
+            for m in matches:
+                # 必要なデータだけ抽出
+                upsert_list.append({
+                    "match_id": m['id'],
+                    "season": SEASON_STR,
+                    "gameweek": m['matchday'],
+                    "home_team": m['homeTeam']['name'],
+                    "away_team": m['awayTeam']['name'],
+                    "kickoff_time": m['utcDate'], # これで日時が入ります
+                    "status": m['status'],        # SCHEDULED, FINISHED, IN_PLAY
+                    "home_score": m['score']['fullTime']['home'],
+                    "away_score": m['score']['fullTime']['away'],
+                    "last_updated": datetime.datetime.now().isoformat()
                 })
-    
-    if bets_payload:
-        # 分割送信
-        for i in range(0, len(bets_payload), chunk_size):
-            chunk = bets_payload[i:i + chunk_size]
-            supabase.table("bets").insert(chunk).execute()
-        st.write(f"✅ ベット履歴移行完了: {len(bets_payload)}件")
+            
+            if upsert_list:
+                # Supabaseへ一括保存
+                supabase.table("matches").upsert(upsert_list).execute()
+                st.toast(f"✅ {len(upsert_list)} 件の試合データを更新しました！", icon="🔄")
+            else:
+                st.toast("更新データがありませんでした", icon="ℹ️")
+                
+        except Exception as e:
+            st.error(f"同期エラー: {e}")
 
-    st.balloons()
-    st.success("🎉 全データ移行プロセス完了！お疲れ様でした！")
+# --- 機能: ベット実行 ---
+def place_bet(user_id, match_id, choice, stake, odds):
+    # 残高チェック
+    user = supabase.table("users").select("balance").eq("user_id", user_id).single().execute()
+    if not user.data: return False, "ユーザーエラー"
+    
+    current_balance = user.data['balance']
+    if current_balance < stake:
+        return False, "残高不足です💸"
+
+    # ベット記録
+    bet_payload = {
+        "user_id": user_id,
+        "match_id": match_id,
+        "choice": choice,
+        "stake": stake,
+        "odds_at_bet": odds,
+        "status": "PENDING"
+    }
+    supabase.table("bets").insert(bet_payload).execute()
+    
+    # 残高引き落とし
+    new_bal = current_balance - stake
+    supabase.table("users").update({"balance": new_bal}).eq("user_id", user_id).execute()
+    
+    return True, new_bal
+
+# --- UI構築 ---
+def main():
+    if not supabase: return
+
+    # サイドバー: ユーザー選択
+    st.sidebar.header("👤 プレイヤー選択")
+    users_res = supabase.table("users").select("*").execute()
+    
+    if not users_res.data:
+        st.warning("ユーザーデータがありません。移行ツールを実行してください。")
+        return
+        
+    users_data = users_res.data
+    user_names = [u['username'] for u in users_data]
+    selected_name = st.sidebar.selectbox("ログイン", user_names)
+    
+    current_user = next(u for u in users_data if u['username'] == selected_name)
+    
+    st.sidebar.divider()
+    st.sidebar.metric("所持金 (Balance)", f"¥{current_user['balance']:,}")
+    
+    st.sidebar.divider()
+    if st.sidebar.button("🔄 試合データを更新 (API)"):
+        sync_matches_from_api()
+
+    # メイン画面
+    st.title("⚽ Premier Picks V2")
+    
+    tab1, tab2 = st.tabs(["📅 ベットする", "📜 ベット履歴"])
+    
+    with tab1:
+        st.subheader("今後の試合")
+        
+        # これから始まる試合を取得 (日時が入っていない場合も考慮して、とりあえず全SCHEDULEDを表示)
+        # ※API同期後はkickoff_timeが入るので、日時順にソート可能
+        now = datetime.datetime.utcnow().isoformat()
+        
+        matches_res = supabase.table("matches")\
+            .select("*")\
+            .eq("status", "SCHEDULED")\
+            .order("kickoff_time", nulls_last=True)\
+            .limit(20)\
+            .execute()
+            
+        matches = matches_res.data
+        if not matches:
+            st.info("現在、ベット可能な試合が見つかりません。「試合データを更新」を押して日程を取得してください。")
+        else:
+            for m in matches:
+                # 簡易カード表示
+                with st.container(border=True):
+                    # 日時フォーマット
+                    ktime = m.get('kickoff_time')
+                    date_str = "日時未定"
+                    if ktime:
+                        dt = pd.to_datetime(ktime).tz_convert('Asia/Tokyo')
+                        date_str = dt.strftime('%m/%d %H:%M')
+                    
+                    col_info, col_bet = st.columns([2, 3])
+                    
+                    with col_info:
+                        st.caption(f"GW {m['gameweek']} | {date_str}")
+                        st.markdown(f"### {m['home_team']} vs {m['away_team']}")
+                    
+                    with col_bet:
+                        with st.form(key=f"bet_form_{m['match_id']}"):
+                            c1, c2, c3 = st.columns([2, 2, 1])
+                            choice = c1.radio("予想", ["HOME", "DRAW", "AWAY"], key=f"rad_{m['match_id']}", label_visibility="collapsed", horizontal=True)
+                            stake = c2.number_input("賭け金", min_value=100, step=100, value=1000, key=f"num_{m['match_id']}", label_visibility="collapsed")
+                            submit = c3.form_submit_button("🔥 ベット")
+                            
+                            if submit:
+                                # ※オッズは簡易的に2.0固定 (本来はOddsテーブル参照)
+                                success, res = place_bet(current_user['user_id'], m['match_id'], choice, stake, 2.0)
+                                if success:
+                                    st.success(f"ベット完了！残高: ¥{res:,}")
+                                    st.rerun()
+                                else:
+                                    st.error(res)
+
+    with tab2:
+        st.subheader(f"{current_user['username']} さんの履歴")
+        
+        # 自分の履歴を取得 (テーブル結合)
+        # ※Supabaseのクライアントで結合クエリは少しコツがいるので、まずは単純取得
+        my_bets = supabase.table("bets").select("*, matches(home_team, away_team, kickoff_time)")\
+            .eq("user_id", current_user['user_id'])\
+            .order("created_at", desc=True)\
+            .limit(50)\
+            .execute()
+            
+        if my_bets.data:
+            # 表示用に整形
+            display_data = []
+            for b in my_bets.data:
+                m = b['matches']
+                match_label = f"{m['home_team']} vs {m['away_team']}" if m else f"Match ID: {b['match_id']}"
+                display_data.append({
+                    "試合": match_label,
+                    "予想": b['choice'],
+                    "金額": f"¥{b['stake']:,}",
+                    "オッズ": b['odds_at_bet'],
+                    "状態": b['status'],
+                    "日付": pd.to_datetime(b['created_at']).tz_convert('Asia/Tokyo').strftime('%Y-%m-%d %H:%M')
+                })
+            st.dataframe(pd.DataFrame(display_data))
+        else:
+            st.info("まだ履歴がありません。")
+
+if __name__ == "__main__":
+    main()
