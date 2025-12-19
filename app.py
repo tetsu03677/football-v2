@@ -1,16 +1,12 @@
 import streamlit as st
-import pandas as pd
 import gspread
-import datetime
+import json
 from supabase import create_client
 
-# ==========================================
-# 設定
-# ==========================================
-st.set_page_config(page_title="Data Migration Tool (Fix)", layout="wide")
-st.title("📦 Google Sheets -> Supabase 完全移行ツール (Fix版)")
+st.set_page_config(page_title="Direct Clone Tool", layout="wide")
+st.title("📦 Google Sheets → Supabase 直コピー (無加工)")
 
-# 接続
+# --- 接続 ---
 try:
     su_url = st.secrets["supabase"]["url"]
     su_key = st.secrets["supabase"]["key"]
@@ -22,211 +18,104 @@ except Exception as e:
     st.error(f"接続設定エラー: {e}")
     st.stop()
 
-# ==========================================
-# ユーティリティ
-# ==========================================
-def clean_int(val):
+# --- コピー実行関数 ---
+def copy_sheet_to_table(sheet_name, table_name, pk_col=None):
     try:
-        s = str(val).replace(',', '').strip()
-        return int(float(s))
-    except:
-        return None
-
-def clean_float(val):
-    try:
-        s = str(val).replace(',', '').strip()
-        return float(s)
-    except:
-        return None
-
-def clean_gw(val):
-    s = str(val).upper()
-    nums = "".join([c for c in s if c.isdigit()])
-    return int(nums) if nums else None
-
-# ==========================================
-# メイン処理
-# ==========================================
-def run_migration():
-    logs = []
-    error_logs = []
-    
-    try:
-        st.info("既存データをクリア中...")
-        # 外部キー制約を考慮して順番に削除（または全削除）
-        # ※エラーが出ても続行する
-        try: supabase.table("bm_history").delete().neq("season", "dummy").execute()
-        except: pass
-        try: supabase.table("bets").delete().neq("choice", "dummy").execute()
-        except: pass
-        # matchesとusersは依存関係があるため残すが、upsertで上書きされる
-
-        # ------------------------------------------------
-        # 1. Users
-        # ------------------------------------------------
-        st.write("1️⃣ ユーザーデータの移行...")
-        ws_bets = sh.worksheet("bets")
-        bets_data = ws_bets.get_all_records()
+        st.write(f"🔄 `{sheet_name}` シートを `{table_name}` テーブルへコピー中...")
+        ws = sh.worksheet(sheet_name)
+        records = ws.get_all_records()
         
-        user_names = set()
-        for r in bets_data:
-            if r.get('user'): user_names.add(str(r.get('user')).strip())
-            
-        u_map = {} # username -> user_id
-        
-        for name in user_names:
-            # 1. Upsert (select()をチェーンしない)
-            supabase.table("users").upsert({
-                "username": name,
-                "password": "password", 
-                "role": "user",
-                "balance": 0
-            }, on_conflict="username").execute()
-            
-            # 2. IDを取得するために再クエリ (これが一番確実)
-            res = supabase.table("users").select("user_id").eq("username", name).single().execute()
-            if res.data:
-                u_map[name] = res.data['user_id']
-        
-        logs.append(f"✅ ユーザー登録完了: {len(u_map)}名")
+        if not records:
+            st.warning(f"  - `{sheet_name}` は空でした。")
+            return
 
-        # ------------------------------------------------
-        # 2. Matches
-        # ------------------------------------------------
-        st.write("2️⃣ 試合データの移行...")
-        ws_odds = sh.worksheet("odds")
-        odds_data = ws_odds.get_all_records()
+        # 既存データ削除
+        supabase.table(table_name).delete().neq(pk_col if pk_col else "gw", "dummy_val").execute()
         
-        matches_payload = []
-        seen_match_ids = set()
+        # 100件ずつインサート
+        chunk_size = 100
+        for i in range(0, len(records), chunk_size):
+            chunk = records[i:i+chunk_size]
+            # 空文字を None に変換せず、そのまま文字列として入れるか、
+            # 数値型カラムでエラーが出る場合は最低限のケアだけする
+            cleaned_chunk = []
+            for r in chunk:
+                # キー名に改行コードなどが含まれる場合のケア (oddsシートの "home\n" など)
+                clean_r = {}
+                for k, v in r.items():
+                    clean_k = k.strip()
+                    # 数値フィールドの空文字ケア
+                    if v == "":
+                        clean_r[clean_k] = None 
+                    else:
+                        # "1,000" などのカンマ除去だけは必要（数値型に入らないため）
+                        if isinstance(v, str) and v.replace(',','').replace('.','').isdigit():
+                             # 数値っぽければカンマ取る
+                             if ',' in v:
+                                 try:
+                                     clean_r[clean_k] = float(v.replace(',',''))
+                                 except:
+                                     clean_r[clean_k] = v
+                             else:
+                                 clean_r[clean_k] = v
+                        else:
+                            clean_r[clean_k] = v
+                cleaned_chunk.append(clean_r)
+
+            # Insert実行
+            supabase.table(table_name).upsert(cleaned_chunk).execute()
+            
+        st.success(f"✅ `{table_name}`: {len(records)} 件 コピー完了")
         
-        for r in odds_data:
-            mid = clean_int(r.get('match_id') or r.get('fd_match_id'))
-            if not mid: continue
-            if mid in seen_match_ids: continue
-            seen_match_ids.add(mid)
-            
-            matches_payload.append({
-                "match_id": mid,
-                "season": "2024",
-                "gameweek": clean_gw(r.get('gw')),
-                "home_team": r.get('home\n') or r.get('home') or "Unknown",
-                "away_team": r.get('away') or "Unknown",
-                "odds_home": clean_float(r.get('home_win')),
-                "odds_draw": clean_float(r.get('draw')),
-                "odds_away": clean_float(r.get('away_win')),
-                "odds_locked": True if str(r.get('locked')).upper() == 'YES' else False,
-                # 日時は後でAPI補完。今はダミー
-                "kickoff_time": datetime.datetime.now().isoformat() 
-            })
-            
-        # 分割Insert
-        for i in range(0, len(matches_payload), 100):
-            try:
-                # Upsertのみ実行
-                supabase.table("matches").upsert(matches_payload[i:i+100]).execute()
-            except Exception as e:
-                error_logs.append(f"Matches Insert Error: {e}")
-                
-        logs.append(f"✅ 試合データ移行: {len(matches_payload)} 件")
-
-        # ------------------------------------------------
-        # 3. Bets
-        # ------------------------------------------------
-        st.write("3️⃣ ベット履歴の移行...")
-        bets_payload = []
-        
-        for r in bets_data:
-            uname = str(r.get('user')).strip()
-            if uname not in u_map: continue
-            
-            mid = clean_int(r.get('match_id') or r.get('fd_match_id'))
-            if not mid: continue
-            
-            # Match補完 (外部キーエラー回避)
-            if mid not in seen_match_ids:
-                try:
-                    supabase.table("matches").upsert({
-                        "match_id": mid,
-                        "season": "2024",
-                        "gameweek": 1,
-                        "home_team": "Unknown Match",
-                        "away_team": "Unknown Match"
-                    }).execute()
-                    seen_match_ids.add(mid)
-                except: continue
-
-            # ステータス正規化
-            raw_res = str(r.get('result', '')).upper()
-            status = 'PENDING'
-            if 'WIN' in raw_res: status = 'WON'
-            elif 'LOSE' in raw_res: status = 'LOST'
-            
-            bets_payload.append({
-                "user_id": u_map[uname],
-                "match_id": mid,
-                "choice": r.get('pick'),
-                "stake": clean_int(r.get('stake')),
-                "odds_at_bet": clean_float(r.get('odds')),
-                "status": status,
-                "created_at": r.get('placed_at') or datetime.datetime.now().isoformat()
-            })
-
-        # 分割Insert
-        for i in range(0, len(bets_payload), 100):
-            try:
-                supabase.table("bets").insert(bets_payload[i:i+100]).execute()
-            except Exception as e:
-                error_logs.append(f"Bets Insert Error (Chunk {i}): {e}")
-                
-        logs.append(f"✅ ベット履歴移行: 対象 {len(bets_payload)} 件")
-
-        # ------------------------------------------------
-        # 4. BM履歴
-        # ------------------------------------------------
-        st.write("4️⃣ BM履歴の移行...")
-        ws_bm = sh.worksheet("bm_log")
-        bm_data = ws_bm.get_all_records()
-        bm_payload = []
-        
-        for r in bm_data:
-            uname = str(r.get('bookmaker')).strip()
-            if uname in u_map:
-                bm_payload.append({
-                    "season": "2024",
-                    "gameweek": clean_gw(r.get('gw')),
-                    "user_id": u_map[uname],
-                    "created_at": r.get('decided_at')
-                })
-        
-        if bm_payload:
-            supabase.table("bm_history").insert(bm_payload).execute()
-        
-        logs.append(f"✅ BM履歴移行: {len(bm_payload)} 件")
-
-        # 完了報告
-        st.success("🎉 データコピー処理が完了しました")
-        for l in logs: st.write(l)
-        if error_logs:
-            st.error("エラーログ:")
-            for e in error_logs: st.write(e)
-            
-        # 件数確認
-        st.divider()
-        st.subheader("📊 移行結果")
-        try:
-            cnt_users = len(supabase.table("users").select("user_id").execute().data)
-            cnt_matches = len(supabase.table("matches").select("match_id").execute().data)
-            cnt_bets = len(supabase.table("bets").select("bet_id").execute().data)
-            
-            st.write(f"- ユーザー数: {cnt_users}")
-            st.write(f"- 試合数: {cnt_matches}")
-            st.write(f"- ベット数: {cnt_bets}")
-        except:
-            st.write("件数取得失敗（データは入っている可能性があります）")
-
     except Exception as e:
-        st.error(f"致命的なエラー: {e}")
+        st.error(f"❌ `{table_name}` のコピー失敗: {e}")
 
-if st.button("🚀 データ移行を実行", type="primary"):
-    run_migration()
+# --- ユーザーマスタ作成 (Configから) ---
+def setup_users():
+    st.write("🔄 ユーザー情報の抽出 (Config -> Users)...")
+    try:
+        # Configシートから users_json を探す
+        res = supabase.table("config").select("value").eq("key", "users_json").execute()
+        if res.data:
+            json_str = res.data[0]['value']
+            users_list = json.loads(json_str)
+            
+            for u in users_list:
+                supabase.table("users").upsert({
+                    "username": u.get("username"),
+                    "password": u.get("password"),
+                    "role": u.get("role"),
+                    "team": u.get("team"),
+                    "balance": 0 # 初期値
+                }, on_conflict="username").execute()
+            st.success(f"✅ ユーザーマスタ作成完了: {len(users_list)}名")
+        else:
+            st.warning("Configに users_json が見つかりません。")
+    except Exception as e:
+        st.error(f"ユーザー作成エラー: {e}")
+
+# --- メイン処理 ---
+if st.button("🚀 完全コピーを実行 (100% Mirror)", type="primary"):
+    # 1. 各シートを対応するテーブルへコピー
+    copy_sheet_to_table("config", "config", "key")
+    copy_sheet_to_table("odds", "odds", "match_id")
+    copy_sheet_to_table("bets", "bets", "key")
+    copy_sheet_to_table("bm_log", "bm_log", "gw")
+    copy_sheet_to_table("result", "result", "match_id")
+    
+    # 2. Usersテーブルの構築
+    setup_users()
+    
+    st.balloons()
+    st.success("🎉 スプレッドシートの内容をSupabaseに完全複製しました。")
+    
+    # 件数確認
+    st.write("---")
+    st.subheader("📊 データ件数確認")
+    tables = ["bets", "odds", "result", "bm_log", "users"]
+    for t in tables:
+        try:
+            cnt = len(supabase.table(t).select("*").execute().data)
+            st.write(f"- **{t}**: {cnt} レコード")
+        except:
+            st.write(f"- {t}: 取得不可")
