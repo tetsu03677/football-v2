@@ -9,7 +9,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. 初期設定 & CSS
 # ==============================================================================
-st.set_page_config(page_title="Premier Picks V2.3", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Premier Picks V2.4", layout="wide", page_icon="⚽")
 JST = timezone(timedelta(hours=9), 'JST')
 
 st.markdown("""
@@ -83,13 +83,17 @@ def fetch_all_data():
     except:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+def get_config_value(config_df, key, default=""):
+    """Configテーブルから値を取得"""
+    if config_df.empty: return default
+    row = config_df[config_df['key'] == key]
+    if not row.empty: return row.iloc[0]['value']
+    return default
+
 def get_api_token(config_df):
     token = st.secrets.get("api_token")
     if token: return token
-    if not config_df.empty:
-        row = config_df[config_df['key'] == 'FOOTBALL_DATA_API_TOKEN']
-        if not row.empty: return row.iloc[0]['value']
-    return ""
+    return get_config_value(config_df, 'FOOTBALL_DATA_API_TOKEN')
 
 # ==============================================================================
 # 2. ロジックコア
@@ -99,7 +103,7 @@ def calculate_stats(bets_df, bm_log_df, users_df):
     if users_df.empty: return {}, {}
     user_stats = {u: {'balance': 0, 'wins': 0, 'total': 0, 'potential': 0} for u in users_df['username'].unique()}
     
-    # BMマップ (GW -> User)
+    # BMマップ
     bm_map = {} 
     if not bm_log_df.empty:
         for _, row in bm_log_df.iterrows():
@@ -136,7 +140,6 @@ def calculate_stats(bets_df, bm_log_df, users_df):
             
             user_stats[p_user]['balance'] += int(pnl)
             
-            # BM反映
             if bm_user and bm_user in user_stats and bm_user != p_user:
                 user_stats[bm_user]['balance'] -= int(pnl)
         else:
@@ -146,42 +149,48 @@ def calculate_stats(bets_df, bm_log_df, users_df):
     return user_stats, bm_map
 
 def determine_current_gw(results_df):
-    """
-    現在時刻を基準にGWを判定。
-    """
+    """GW自動判定"""
     if results_df.empty: return "GW1"
     
-    # 日付変換
     results_df['dt'] = pd.to_datetime(results_df['utc_kickoff'], errors='coerce', utc=True)
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     
-    # 1. これから行われる、または現在進行中の試合 (4時間前以降)
+    # 4時間前〜未来の試合
     active = results_df[results_df['dt'] > (now_utc - timedelta(hours=4))].sort_values('dt')
     
     if not active.empty:
         return active.iloc[0]['gw']
     
-    # 2. 未来がない場合、直近の過去の試合
+    # なければ直近の過去
     past = results_df[results_df['dt'] <= now_utc].sort_values('dt', ascending=False)
     if not past.empty:
         return past.iloc[0]['gw']
         
     return "GW1"
 
-def sync_with_api(api_token):
-    """API同期: Season=2025に変更"""
+def sync_with_api(api_token, season_str, reset=False):
+    """
+    API同期
+    reset=True の場合、既存のresultデータを全削除してから取り直す
+    """
     if not api_token: return False, "Token missing"
     headers = {'X-Auth-Token': api_token}
     
-    # ★重要修正: シーズンを2025に (2025-2026シーズン)
-    url = "https://api.football-data.org/v4/competitions/PL/matches?season=2025"
+    # Configのシーズンを使う (デフォルト2025)
+    season = season_str if season_str else "2025"
+    url = f"https://api.football-data.org/v4/competitions/PL/matches?season={season}"
     
     try:
         res = requests.get(url, headers=headers)
         if res.status_code != 200: return False, f"API Error {res.status_code}"
         
         matches = res.json().get('matches', [])
-        if not matches: return False, "No matches found (Check Season)"
+        if not matches: return False, f"No matches found for season {season}"
+        
+        # リセットモードなら全削除
+        if reset:
+            # resultテーブルをクリア（match_id > 0 で全削除）
+            supabase.table("result").delete().gt("match_id", 0).execute()
         
         upserts = []
         for m in matches:
@@ -200,7 +209,8 @@ def sync_with_api(api_token):
         chunk = 100
         for i in range(0, len(upserts), chunk):
             supabase.table("result").upsert(upserts[i:i+chunk]).execute()
-        return True, f"Synced {len(upserts)} matches (Season 2025)"
+            
+        return True, f"Synced {len(upserts)} matches (Season {season})"
     except Exception as e:
         return False, str(e)
 
@@ -230,11 +240,12 @@ def main():
         
     me = st.session_state['user']
     api_token = get_api_token(config)
+    season_setting = get_config_value(config, "API_FOOTBALL_SEASON", "2025")
 
-    # 初回自動同期
+    # 初回自動同期 (Configのシーズンで)
     if 'auto_synced' not in st.session_state:
-        with st.spinner("🚀 Initializing Season 2025 Data..."):
-            sync_with_api(api_token)
+        with st.spinner(f"🚀 Syncing Season {season_setting}..."):
+            sync_with_api(api_token, season_setting)
         st.session_state['auto_synced'] = True
         st.rerun()
 
@@ -265,7 +276,7 @@ def main():
     st.sidebar.divider()
     if st.sidebar.button("🔄 Manual Sync"):
         with st.spinner("Syncing..."):
-            sync_with_api(api_token)
+            sync_with_api(api_token, season_setting)
         st.rerun()
     if st.sidebar.button("Logout"):
         st.session_state['user'] = None; st.rerun()
@@ -298,10 +309,12 @@ def main():
         idx = gw_list.index(current_gw) if current_gw in gw_list else 0
         sel_gw = st.selectbox("Gameweek", gw_list, index=idx)
         
+        st.markdown(f"#### {sel_gw} Fixtures")
+        
         target_matches = results[results['gw'] == sel_gw].sort_values('utc_kickoff')
         
         if target_matches.empty:
-            st.info("No matches.")
+            st.info("No matches found for this GW.")
         else:
             for _, m in target_matches.iterrows():
                 mid = m['match_id']
@@ -359,11 +372,9 @@ def main():
                                     }).execute()
                                     st.success("Bet Placed!"); time.sleep(1); st.rerun()
 
-    # [3] History (Filtered)
+    # [3] History
     with tabs[2]:
         st.markdown("#### Betting History")
-        
-        # フィルター追加
         u_options = ["All"] + users['username'].tolist()
         sel_user = st.selectbox("Filter User", u_options, index=0)
         
@@ -376,7 +387,6 @@ def main():
                 res = b['result'] if b['result'] else "PENDING"
                 cls = "hist-card"
                 pnl_str = "PENDING"
-                
                 if res == 'WIN':
                     cls += " hist-win"
                     p = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
@@ -385,7 +395,6 @@ def main():
                     cls += " hist-lose"
                     pnl_str = f"-{fmt_yen(b['stake'])}"
                 
-                # アバター
                 av_col = "#3b82f6"
                 if b['user'] == 'Toshiya': av_col = "#ef4444"
                 elif b['user'] == 'Koki': av_col = "#fbbf24"
@@ -421,22 +430,33 @@ def main():
             </div>
             """, unsafe_allow_html=True)
 
-    # [5] Admin (BM Assign)
+    # [5] Admin
     with tabs[4]:
         if me['role'] == 'admin':
-            st.markdown("#### 🛠 Bookmaker Assignment")
-            with st.form("bm_assign"):
-                target_gw = st.selectbox("Target GW", gw_list)
-                target_user = st.selectbox("Assign User", users['username'].tolist())
-                if st.form_submit_button("Assign"):
-                    supabase.table("bm_log").upsert({
-                        "gw": target_gw,
-                        "gw_number": int(target_gw.replace("GW","")),
-                        "bookmaker": target_user,
-                        "decided_at": datetime.datetime.now().isoformat()
-                    }).execute()
-                    st.success(f"Assigned {target_user} to {target_gw}")
-                    time.sleep(1); st.rerun()
+            st.markdown("#### 🛠 Admin Tools")
+            
+            # BM割当
+            with st.expander("Assign BM"):
+                with st.form("bm_assign"):
+                    target_gw = st.selectbox("GW", gw_list)
+                    target_user = st.selectbox("User", users['username'].tolist())
+                    if st.form_submit_button("Assign"):
+                        supabase.table("bm_log").upsert({
+                            "gw": target_gw,
+                            "gw_number": int(target_gw.replace("GW","")),
+                            "bookmaker": target_user,
+                            "decided_at": datetime.datetime.now().isoformat()
+                        }).execute()
+                        st.success("Updated!"); time.sleep(1); st.rerun()
+                        
+            # 試合データ強制リセット
+            st.warning("⚠️ Matches Reset")
+            st.write(f"Current Season Setting: **{season_setting}**")
+            if st.button("💥 Reset Matches (Clear & Sync)"):
+                with st.spinner("Deleting old matches and re-syncing..."):
+                    ok, msg = sync_with_api(api_token, season_setting, reset=True)
+                    if ok: st.success(msg); time.sleep(1); st.rerun()
+                    else: st.error(msg)
 
 # Utils
 def to_jst_str(iso_str):
