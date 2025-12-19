@@ -9,12 +9,12 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (Minimalist Typography)
+# 0. System Configuration & CSS (Minimalist Typography / Glassmorphism)
 # ==============================================================================
 st.set_page_config(page_title="Football App V3.8", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
-# Minimalist CSS: No hacks, just elegant layout and typography
+# Minimalist CSS: Transparent layers, Monospace fonts, No forced input colors
 st.markdown("""
 <style>
     /* --- Layout --- */
@@ -26,14 +26,13 @@ st.markdown("""
         padding-right: 0.5rem;
     }
 
-    /* --- Vertical Card Integration --- */
-    /* Integrated Card Look using Streamlit's native theme colors + transparency */
+    /* --- Vertical Card Integration (Glassmorphism) --- */
     .app-card-top {
         border: 1px solid rgba(255,255,255,0.08);
         border-bottom: none;
         border-radius: 12px 12px 0 0;
         padding: 20px 20px 10px 20px;
-        background: rgba(255,255,255,0.03); /* Subtle overlay */
+        background: rgba(255,255,255,0.03); /* Subtle glass effect */
         margin-bottom: 0px;
     }
     
@@ -42,7 +41,7 @@ st.markdown("""
         border-top: none;
         border-radius: 0 0 12px 12px;
         padding: 0 20px 20px 20px;
-        background: rgba(255,255,255,0.015); /* Slightly lighter bottom */
+        background: rgba(255,255,255,0.015);
         margin-bottom: 24px;
     }
 
@@ -69,8 +68,14 @@ st.markdown("""
     }
     
     /* --- Form Guide (Old -> New) --- */
-    .form-container { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; opacity: 0.9; }
-    .form-arrow { font-size: 0.6rem; color: #666; font-family: sans-serif; text-transform: uppercase; margin: 0 4px; }
+    .form-container { 
+        display: flex; align-items: center; justify-content: center; 
+        gap: 6px; margin-top: 8px; opacity: 0.9; 
+    }
+    .form-arrow { 
+        font-size: 0.6rem; color: #666; font-family: sans-serif; 
+        text-transform: uppercase; margin: 0 4px; letter-spacing: 1px;
+    }
     .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; }
     .form-ha { font-size: 0.55rem; opacity: 0.5; font-weight: bold; margin-bottom: 3px; }
     .form-icon { font-size: 0.8rem; }
@@ -102,16 +107,22 @@ st.markdown("""
     .status-msg { text-align: center; opacity: 0.5; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 12px; padding-bottom: 8px; }
     .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; }
 
-    /* --- Dashboard Lists --- */
+    /* --- Dashboard Lists (No Charts) --- */
     .kpi-box { text-align: center; padding: 20px; background: rgba(255,255,255,0.02); border-radius: 8px; }
-    .kpi-label { font-size: 0.8rem; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; }
-    .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; margin-top: 4px; }
+    .kpi-label { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; letter-spacing: 2px; }
+    .kpi-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; margin-top: 4px; color: #fff; }
     
     .rank-list-item { 
         display: flex; justify-content: space-between; padding: 12px 0; 
-        border-bottom: 1px solid rgba(255,255,255,0.05); font-family: 'Courier New', monospace; 
+        border-bottom: 1px solid rgba(255,255,255,0.05); font-family: 'Courier New', monospace; font-size: 0.9rem;
     }
     .rank-pos { color: #fbbf24; font-weight: bold; margin-right: 12px; }
+    .prof-amt { color: #4ade80; font-weight: bold; }
+
+    /* --- History Cards --- */
+    .hist-card { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
+    .h-win { border-left-color: #4ade80; }
+    .h-lose { border-left-color: #f87171; }
 
     /* Hide Streamlit Branding */
     #MainMenu {visibility: hidden;}
@@ -131,7 +142,7 @@ def get_supabase():
 supabase = get_supabase()
 
 def fetch_all_data():
-    [cite_start]"""Fetch all tables safely[cite: 3]."""
+    """Fetch all tables safely."""
     try:
         def get_df_safe(table, expected_cols):
             try:
@@ -143,12 +154,12 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        [cite_start]bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at']) # [cite: 4]
-        [cite_start]odds = get_df_safe("odds", ['match_id','home_win','draw','away_win']) # [cite: 6]
-        [cite_start]results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score']) # [cite: 5]
-        [cite_start]bm_log = get_df_safe("bm_log", ['gw','bookmaker']) # [cite: 6]
+        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at']) # [cite: 3, 4]
+        odds = get_df_safe("odds", ['match_id','home_win','draw','away_win']) # [cite: 3, 6]
+        results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score']) # [cite: 3, 5]
+        bm_log = get_df_safe("bm_log", ['gw','bookmaker']) # [cite: 3, 6]
         users = get_df_safe("users", ['username','password','role','team'])
-        [cite_start]config = get_df_safe("config", ['key','value']) # [cite: 7]
+        config = get_df_safe("config", ['key','value']) # [cite: 3, 7]
         
         return bets, odds, results, bm_log, users, config
     except Exception as e:
@@ -186,7 +197,7 @@ def to_jst(iso_str):
 def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     """
     Generate Form Guide HTML (Single Line).
-    [cite_start]Order: Old (Left) -> New (Right) [cite: 9]
+    Order: Old (Left) -> New (Right) 
     """
     if results_df.empty: return "-"
     if 'dt_jst' not in results_df.columns:
@@ -225,7 +236,7 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     return "".join(html_parts)
 
 def calculate_stats(bets_df, bm_log_df, users_df):
-    """Zero-Sum P&L for settled bets"""
+    """Zero-Sum P&L for settled bets """
     if users_df.empty: return {}, {}
     stats = {u: {'balance': 0, 'wins': 0, 'total': 0, 'potential': 0} for u in users_df['username'].unique()}
     
@@ -242,7 +253,6 @@ def calculate_stats(bets_df, bm_log_df, users_df):
         if user not in stats: continue
         res = str(b.get('result', '')).upper()
         
-        # Determine settled status from result column primarily
         is_settled = (res in ['WIN', 'LOSE'])
         
         stake = float(b['stake']) if b['stake'] else 0
@@ -267,39 +277,34 @@ def calculate_stats(bets_df, bm_log_df, users_df):
 
 def calculate_profitable_clubs(bets_df, results_df):
     """
-    [cite_start]Dashboard Logic: Calculate Profitable Clubs (TOP 3) per user[cite: 8].
+    Dashboard Logic: Calculate Profitable Clubs (TOP 3) per user.
     Returns dict: {user: [{'team': 'Arsenal', 'profit': 15000}, ...]}
     """
     if bets_df.empty or results_df.empty: return {}
     
-    # Filter winning bets
     wins = bets_df[bets_df['result'] == 'WIN'].copy()
     if wins.empty: return {}
     
-    user_club_pnl = {} # {user: {team: profit}}
+    user_club_pnl = {} 
     
     for _, b in wins.iterrows():
         user = b['user']
         mid = b['match_id']
         pick = b['pick']
         
-        # Get match info
         m_rows = results_df[results_df['match_id'] == mid]
         if m_rows.empty: continue
         m = m_rows.iloc[0]
         
-        # Identify Team
         team = None
         if pick == 'HOME': team = m['home']
         elif pick == 'AWAY': team = m['away']
-        # Draw is not a club, skip or treat as "Draw" (Design says "Profitable Clubs", implies teams)
         
         if team:
             if user not in user_club_pnl: user_club_pnl[user] = {}
             profit = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
             user_club_pnl[user][team] = user_club_pnl[user].get(team, 0) + int(profit)
             
-    # Sort and take Top 3
     final_ranking = {}
     for u, clubs in user_club_pnl.items():
         sorted_clubs = sorted(clubs.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -308,11 +313,11 @@ def calculate_profitable_clubs(bets_df, results_df):
     return final_ranking
 
 def calculate_live_pnl(bets_df, results_df, bm_map, users_df, target_gw):
-    """Live P&L"""
+    """Live P&L """
     base_stats, _ = calculate_stats(bets_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
     live_data = []
 
-    target_bets = bets_df[(bets_df['gw'] == target_gw) & (bets_df.get('result', '') == '')].copy() # Open bets
+    target_bets = bets_df[(bets_df['gw'] == target_gw) & (bets_df.get('result', '') == '')].copy()
     sim_pnl = {u: 0 for u in users_df['username'].unique()}
     current_bm = bm_map.get(target_gw)
     
@@ -341,7 +346,7 @@ def calculate_live_pnl(bets_df, results_df, bm_map, users_df, target_gw):
     return pd.DataFrame(live_data).sort_values('Total', ascending=False)
 
 def get_strict_target_gw(results_df):
-    [cite_start]"""Strict Future Mode [cite: 8]"""
+    """Strict Future Mode """
     if results_df.empty: return "GW1"
     now_jst = datetime.datetime.now(JST)
     if 'dt_jst' not in results_df.columns: results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
@@ -358,7 +363,7 @@ def get_strict_target_gw(results_df):
     return "GW1"
 
 def check_and_assign_bm(target_gw, bm_log_df, users_df):
-    [cite_start]"""Fairness Algorithm [cite: 8]"""
+    """Fairness Algorithm """
     if users_df.empty: return
     nums = "".join([c for c in target_gw if c.isdigit()])
     existing = False
@@ -481,7 +486,7 @@ def main():
             matches = results[results['gw'] == target_gw].copy()
             if not matches.empty:
                 matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
-                # [cite_start]Strict Future Filter [cite: 8]
+                # Strict Future Filter
                 matches = matches[matches['dt_jst'] >= pd.Timestamp("2025-07-01", tz=JST)].sort_values('dt_jst')
                 
                 if not matches.empty:
@@ -500,13 +505,8 @@ def main():
                     od = o_row.iloc[0]['draw'] if not o_row.empty else 0
                     oa = o_row.iloc[0]['away_win'] if not o_row.empty else 0
                     
-                    form_html = get_recent_form_html(f"{m['home']} vs {m['away']}", results, m['dt_jst']) # Pass matchup for context if needed, but func uses names. Fix below.
-                    # Actually get_recent_form_html takes team_name. We need 2 calls.
-                    # Wait, prompt says "Old <- H x A -> New". This implies combined? 
-                    # Definition says: "Old <- 🔵 ❌ ... -> New".
-                    # Let's render two separate form guides or one combined? 
-                    # Usually Form Guide is per team. V3.8 def says: "戦績表示... 順序... 左が古い".
-                    # Let's render Home Form and Away Form separately in the grid.
+                    form_html = get_recent_form_html(f"{m['home']} vs {m['away']}", results, m['dt_jst']) # Use team name
+                    # Re-render properly for Home and Away
                     form_h = get_recent_form_html(m['home'], results, m['dt_jst'])
                     form_a = get_recent_form_html(m['away'], results, m['dt_jst'])
                     
@@ -632,7 +632,6 @@ def main():
 
     # --- TAB 4: DASHBOARD ---
     with t4:
-        # [cite_start]Consolidated Dashboard [cite: 9]
         st.markdown("### 🏆 DASHBOARD")
         
         # 1. Main KPI
@@ -645,7 +644,7 @@ def main():
         
         st.markdown("---")
         
-        # [cite_start]2. Profitable Clubs (TOP 3) [cite: 8]
+        # 2. Profitable Clubs (TOP 3)
         st.markdown("#### 💰 PROFITABLE CLUBS")
         prof_data = calculate_profitable_clubs(bets, results)
         if prof_data:
@@ -655,7 +654,7 @@ def main():
                     st.markdown(f"**{u}**")
                     if clubs:
                         for j, (team, amt) in enumerate(clubs):
-                            st.markdown(f"<div class='rank-list-item'><span class='rank-pos'>{j+1}.</span> <span style='flex:1'>{team}</span> <span style='color:#4ade80'>+¥{amt:,}</span></div>", unsafe_allow_html=True)
+                            st.markdown(f"<div class='rank-list-item'><span class='rank-pos'>{j+1}.</span> <span style='flex:1'>{team}</span> <span class='prof-amt'>+¥{amt:,}</span></div>", unsafe_allow_html=True)
                     else:
                         st.caption("No wins yet.")
         else:
@@ -699,6 +698,13 @@ def main():
                             supabase.table("odds").upsert({"match_id": sel_m_id, "home_win": new_h, "draw": new_d, "away_win": new_a}).execute()
                             st.success("Updated"); time.sleep(1); st.rerun()
                     else: st.warning("No matches.")
+            with st.expander("👑 BM Manual Override"):
+                 with st.form("bm_manual"):
+                    t_gw = st.selectbox("GW", sorted(results['gw'].unique()) if not results.empty else ["GW1"])
+                    t_u = st.selectbox("User", users['username'].tolist())
+                    if st.form_submit_button("Assign"):
+                        supabase.table("bm_log").upsert({"gw": t_gw, "bookmaker": t_u}).execute()
+                        st.success("Assigned"); time.sleep(1); st.rerun()
 
 if __name__ == "__main__":
     main()
