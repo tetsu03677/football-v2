@@ -16,14 +16,13 @@ JST = timezone(timedelta(hours=9), 'JST')
 # --- CSS Design System ---
 st.markdown("""
 <style>
-/* 全体レイアウト: スマホ操作を意識した余白設定 */
+/* 全体レイアウト */
 .block-container {
     padding-top: 3.5rem;
     padding-bottom: 6rem;
     max-width: 1000px;
 }
-
-/* カードデザイン: ガラスモーフィズム風ダークテーマ */
+/* カードデザイン */
 .app-card {
     border: 1px solid rgba(255,255,255,0.1);
     border-radius: 12px;
@@ -32,7 +31,6 @@ st.markdown("""
     margin-bottom: 12px;
     box-shadow: 0 4px 6px rgba(0,0,0,0.2);
 }
-
 /* テキストスタイル */
 .subtle { color: rgba(255,255,255,.5); font-size: 0.8rem; }
 .bold-text { font-weight: 700; color: #f3f4f6; }
@@ -55,7 +53,7 @@ st.markdown("""
 .kpi-label { font-size: 0.7rem; color: rgba(255,255,255,0.6); text-transform: uppercase; letter-spacing: 1px; }
 .kpi-value { font-size: 1.4rem; font-weight: 800; margin-top: 4px; }
 
-/* 新機能: ポテンシャル利益 (Profit Engine) */
+/* 新機能: ポテンシャル利益 */
 .potential-box {
     margin-top: 15px;
     padding: 12px;
@@ -95,24 +93,16 @@ st.markdown("""
 # ==============================================================================
 @st.cache_resource(ttl=3600)
 def get_supabase_client():
-    """
-    Supabaseクライアントを生成。
-    httpxエラー回避のためタイムアウト設定を独自に行う。
-    """
+    """Supabaseクライアントを生成"""
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        
-        # 修正: ClientOptionsを使わず、postgrestのオプションを直接設定する方法に変更
-        # (ライブラリのバージョン差異を吸収するためシンプルな初期化)
         client = create_client(url, key)
-        
-        # タイムアウト設定を試みる（ライブラリバージョンによる）
+        # タイムアウト設定を試みる（ライブラリバージョン依存の回避）
         try:
             client.postgrest.timeout = 20
         except:
             pass
-            
         return client
     except Exception as e:
         st.error(f"System Error (DB Init): {e}")
@@ -121,18 +111,14 @@ def get_supabase_client():
 supabase = get_supabase_client()
 
 def run_db_query(query_func, retries=3):
-    """
-    DB操作のリトライラッパー。
-    一時的なネットワークエラーなら3回まで再試行する。
-    """
+    """DB操作のリトライラッパー"""
     for i in range(retries):
         try:
             return query_func()
         except Exception as e:
             if i == retries - 1:
-                # 最後の試行でも失敗した場合
                 return None
-            time.sleep(1) # 1秒待ってリトライ
+            time.sleep(1)
     return None
 
 def get_config():
@@ -149,7 +135,6 @@ def get_config():
 # 2. ユーティリティ関数群 (Format & Calc)
 # ==============================================================================
 def fmt_yen(n):
-    """金額フォーマット"""
     if n is None: return "¥0"
     try:
         return f"¥{int(n):,}"
@@ -157,10 +142,8 @@ def fmt_yen(n):
         return str(n)
 
 def to_jst_str(iso_str, fmt='%m/%d %H:%M'):
-    """JST変換"""
     if not iso_str: return "-"
     try:
-        # ISOフォーマットが不完全な場合のガード
         dt = pd.to_datetime(iso_str)
         if dt.tz is None:
             dt = dt.tz_localize('UTC')
@@ -168,20 +151,26 @@ def to_jst_str(iso_str, fmt='%m/%d %H:%M'):
     except:
         return str(iso_str)
 
+def parse_gw_number(val):
+    """ 'GW7' -> 7, '10' -> 10 に変換する安全装置 """
+    s = str(val).upper()
+    # 数字だけ抽出
+    nums = ''.join(filter(str.isdigit, s))
+    if nums:
+        return int(nums)
+    return 1 # Fallback
+
 # ==============================================================================
-# 3. ビジネスロジック・コア (Sync, Assign, Calc)
+# 3. ビジネスロジック
 # ==============================================================================
 
 def sync_data_process(api_token, season_str="2024"):
-    """
-    データ同期のメインプロセス。
-    """
+    """データ同期: 試合更新, オッズロック, 自動精算"""
     if not api_token:
         return False, "API Token is missing."
 
     headers = {'X-Auth-Token': api_token}
     
-    # 範囲を広めに取る
     d_now = datetime.datetime.now()
     d_from = (d_now - timedelta(days=14)).strftime('%Y-%m-%d')
     d_to = (d_now + timedelta(days=21)).strftime('%Y-%m-%d')
@@ -236,13 +225,11 @@ def sync_data_process(api_token, season_str="2024"):
             if m['status'] == 'FINISHED':
                 finished_ids.append(m['id'])
         
-        # 1. 試合データ保存 (Batch Upsert)
         if upsert_list:
             def _upsert():
                 supabase.table("matches").upsert(upsert_list).execute()
             run_db_query(_upsert)
 
-        # 2. 自動精算処理
         settled_count = 0
         if finished_ids:
             def _get_pending():
@@ -251,7 +238,6 @@ def sync_data_process(api_token, season_str="2024"):
             pending_res = run_db_query(_get_pending)
             pending_bets = pending_res.data if pending_res else []
             
-            # 最新の試合情報を取得（スコア確実化）
             def _get_matches():
                 return supabase.table("matches").select("*").in_("match_id", finished_ids).execute()
             
@@ -264,7 +250,6 @@ def sync_data_process(api_token, season_str="2024"):
                 
                 hs = m_info['home_score']
                 as_ = m_info['away_score']
-                
                 if hs is None or as_ is None: continue 
                 
                 actual_result = "DRAW"
@@ -282,7 +267,7 @@ def sync_data_process(api_token, season_str="2024"):
                 # DB更新
                 supabase.table("bets").update({"status": new_status}).eq("bet_id", b['bet_id']).execute()
                 
-                # 残高反映 (P2P: Player vs BM)
+                # P2P Settlement
                 bm_query = supabase.table("bm_history").select("user_id").eq("gameweek", m_info['gameweek']).eq("season", season_str).execute()
                 bm_id = bm_query.data[0]['user_id'] if bm_query.data else None
                 
@@ -299,9 +284,6 @@ def sync_data_process(api_token, season_str="2024"):
         return False, f"Sync Exception: {e}"
 
 def get_detailed_user_stats(user_id):
-    """
-    ユーザーの詳細分析データを取得
-    """
     def _q():
         return supabase.table("bets").select("*, matches(*)").eq("user_id", user_id).execute()
     
@@ -369,7 +351,7 @@ def get_detailed_user_stats(user_id):
     return stats
 
 # ==============================================================================
-# 4. UI: コンポーネント (Reusable)
+# 4. UI: コンポーネント
 # ==============================================================================
 
 def render_login_sidebar(users):
@@ -394,7 +376,7 @@ def render_match_card(m, me, users, conf):
     od = m.get('odds_draw') or '-'
     oa = m.get('odds_away') or '-'
     
-    # 他人のベット取得 (簡易実装)
+    # 他人のベット (N+1回避のため親で取得すべきだが、ここは簡易実装)
     bets_res = run_db_query(lambda: supabase.table("bets").select("user_id, choice").eq("match_id", mid).execute())
     other_bets_html = ""
     my_bet_info = None
@@ -560,7 +542,9 @@ def main():
                 """, unsafe_allow_html=True)
 
     with tabs[1]:
-        curr_gw = int(conf.get("current_gw", 1))
+        # ★ ここで安全にパース
+        curr_gw = parse_gw_number(conf.get("current_gw", "1"))
+        
         st.markdown(f"#### Gameweek {curr_gw}")
         matches_res = run_db_query(lambda: supabase.table("matches").select("*").eq("gameweek", curr_gw).order("kickoff_time").execute())
         matches = matches_res.data if matches_res else []
