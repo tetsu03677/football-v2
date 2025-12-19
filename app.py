@@ -45,7 +45,6 @@ sheet_names = [ws.title for ws in worksheet_list]
 col1, col2 = st.columns(2)
 with col1:
     # 試合日程のシートを選ぶ
-    # "schedule" や "fixture" が含まれるシートを初期値にする
     default_sched = 0
     for i, name in enumerate(sheet_names):
         if "schedule" in name.lower() or "fixture" in name.lower() or "match" in name.lower():
@@ -55,7 +54,6 @@ with col1:
 
 with col2:
     # ベット履歴のシートを選ぶ
-    # "bet" が含まれるシートを初期値にする
     default_bets = 0
     for i, name in enumerate(sheet_names):
         if "bet" in name.lower():
@@ -161,7 +159,6 @@ if st.button("🚀 移行スタート (確定版)"):
                     "stake": r.get("stake", 0),    # あなたのCSV通り 'stake'
                     "odds_at_bet": r.get("odds", 1.0), # あなたのCSV通り 'odds'
                     "status": "PENDING" 
-                    # resultやpayoutは一旦計算せず、まずはベット履歴として取り込みます
                 })
                 
         if bets_payload:
