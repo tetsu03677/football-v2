@@ -26,17 +26,15 @@ supabase = init_connection()
 
 # --- 機能: APIから最新日程を取得してDB更新 ---
 def sync_matches_from_api():
-    # Secretsからトークン取得 (旧アプリの書き方に合わせる)
     token = st.secrets.get("api_token") or st.secrets.get("X-Auth-Token")
     
     if not token:
-        st.warning("⚠️ APIトークンが見つかりません。Secretsに 'api_token' を設定すると、試合日程を自動更新できます。")
+        st.warning("⚠️ Secretsに 'api_token' が設定されていません。")
         return
 
     headers = {'X-Auth-Token': token}
     with st.spinner("APIから最新の試合情報を取得中..."):
         try:
-            # 今シーズンの試合を取得
             response = requests.get(f"{API_URL}?season=2024", headers=headers)
             if response.status_code != 200:
                 st.error(f"APIエラー: {response.status_code}")
@@ -47,22 +45,20 @@ def sync_matches_from_api():
             
             upsert_list = []
             for m in matches:
-                # 必要なデータだけ抽出
                 upsert_list.append({
                     "match_id": m['id'],
                     "season": SEASON_STR,
                     "gameweek": m['matchday'],
                     "home_team": m['homeTeam']['name'],
                     "away_team": m['awayTeam']['name'],
-                    "kickoff_time": m['utcDate'], # これで日時が入ります
-                    "status": m['status'],        # SCHEDULED, FINISHED, IN_PLAY
+                    "kickoff_time": m['utcDate'],
+                    "status": m['status'],
                     "home_score": m['score']['fullTime']['home'],
                     "away_score": m['score']['fullTime']['away'],
                     "last_updated": datetime.datetime.now().isoformat()
                 })
             
             if upsert_list:
-                # Supabaseへ一括保存
                 supabase.table("matches").upsert(upsert_list).execute()
                 st.toast(f"✅ {len(upsert_list)} 件の試合データを更新しました！", icon="🔄")
             else:
@@ -73,7 +69,6 @@ def sync_matches_from_api():
 
 # --- 機能: ベット実行 ---
 def place_bet(user_id, match_id, choice, stake, odds):
-    # 残高チェック
     user = supabase.table("users").select("balance").eq("user_id", user_id).single().execute()
     if not user.data: return False, "ユーザーエラー"
     
@@ -81,7 +76,6 @@ def place_bet(user_id, match_id, choice, stake, odds):
     if current_balance < stake:
         return False, "残高不足です💸"
 
-    # ベット記録
     bet_payload = {
         "user_id": user_id,
         "match_id": match_id,
@@ -92,7 +86,6 @@ def place_bet(user_id, match_id, choice, stake, odds):
     }
     supabase.table("bets").insert(bet_payload).execute()
     
-    # 残高引き落とし
     new_bal = current_balance - stake
     supabase.table("users").update({"balance": new_bal}).eq("user_id", user_id).execute()
     
@@ -102,12 +95,16 @@ def place_bet(user_id, match_id, choice, stake, odds):
 def main():
     if not supabase: return
 
-    # サイドバー: ユーザー選択
+    # サイドバー
     st.sidebar.header("👤 プレイヤー選択")
-    users_res = supabase.table("users").select("*").execute()
-    
+    try:
+        users_res = supabase.table("users").select("*").execute()
+    except Exception as e:
+        st.error(f"データ取得エラー: {e}")
+        return
+
     if not users_res.data:
-        st.warning("ユーザーデータがありません。移行ツールを実行してください。")
+        st.warning("ユーザーデータがありません。")
         return
         
     users_data = users_res.data
@@ -131,33 +128,30 @@ def main():
     with tab1:
         st.subheader("今後の試合")
         
-        # これから始まる試合を取得 (日時が入っていない場合も考慮して、とりあえず全SCHEDULEDを表示)
-        # ※API同期後はkickoff_timeが入るので、日時順にソート可能
-        now = datetime.datetime.utcnow().isoformat()
-        
+        # ★修正箇所: nulls_last を削除し、単純な昇順ソートに変更
         matches_res = supabase.table("matches")\
             .select("*")\
             .eq("status", "SCHEDULED")\
-            .order("kickoff_time", nulls_last=True)\
+            .order("kickoff_time", desc=False)\
             .limit(20)\
             .execute()
             
         matches = matches_res.data
         if not matches:
-            st.info("現在、ベット可能な試合が見つかりません。「試合データを更新」を押して日程を取得してください。")
+            st.info("ベット可能な試合が見つかりません。「試合データを更新」を押してください。")
         else:
             for m in matches:
-                # 簡易カード表示
                 with st.container(border=True):
-                    # 日時フォーマット
                     ktime = m.get('kickoff_time')
                     date_str = "日時未定"
                     if ktime:
-                        dt = pd.to_datetime(ktime).tz_convert('Asia/Tokyo')
-                        date_str = dt.strftime('%m/%d %H:%M')
+                        try:
+                            dt = pd.to_datetime(ktime).tz_convert('Asia/Tokyo')
+                            date_str = dt.strftime('%m/%d %H:%M')
+                        except:
+                            date_str = str(ktime)
                     
                     col_info, col_bet = st.columns([2, 3])
-                    
                     with col_info:
                         st.caption(f"GW {m['gameweek']} | {date_str}")
                         st.markdown(f"### {m['home_team']} vs {m['away_team']}")
@@ -170,7 +164,6 @@ def main():
                             submit = c3.form_submit_button("🔥 ベット")
                             
                             if submit:
-                                # ※オッズは簡易的に2.0固定 (本来はOddsテーブル参照)
                                 success, res = place_bet(current_user['user_id'], m['match_id'], choice, stake, 2.0)
                                 if success:
                                     st.success(f"ベット完了！残高: ¥{res:,}")
@@ -180,9 +173,6 @@ def main():
 
     with tab2:
         st.subheader(f"{current_user['username']} さんの履歴")
-        
-        # 自分の履歴を取得 (テーブル結合)
-        # ※Supabaseのクライアントで結合クエリは少しコツがいるので、まずは単純取得
         my_bets = supabase.table("bets").select("*, matches(home_team, away_team, kickoff_time)")\
             .eq("user_id", current_user['user_id'])\
             .order("created_at", desc=True)\
@@ -190,18 +180,23 @@ def main():
             .execute()
             
         if my_bets.data:
-            # 表示用に整形
             display_data = []
             for b in my_bets.data:
-                m = b['matches']
-                match_label = f"{m['home_team']} vs {m['away_team']}" if m else f"Match ID: {b['match_id']}"
+                m = b.get('matches') or {}
+                match_label = f"{m.get('home_team','?')} vs {m.get('away_team','?')}"
+                
+                created_str = b['created_at']
+                try:
+                    created_str = pd.to_datetime(b['created_at']).tz_convert('Asia/Tokyo').strftime('%Y-%m-%d %H:%M')
+                except: pass
+
                 display_data.append({
                     "試合": match_label,
                     "予想": b['choice'],
                     "金額": f"¥{b['stake']:,}",
                     "オッズ": b['odds_at_bet'],
                     "状態": b['status'],
-                    "日付": pd.to_datetime(b['created_at']).tz_convert('Asia/Tokyo').strftime('%Y-%m-%d %H:%M')
+                    "日時": created_str
                 })
             st.dataframe(pd.DataFrame(display_data))
         else:
