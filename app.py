@@ -9,7 +9,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. 初期設定 & CSS
 # ==============================================================================
-st.set_page_config(page_title="Premier Picks V2.4", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Premier Picks V2.5", layout="wide", page_icon="⚽")
 JST = timezone(timedelta(hours=9), 'JST')
 
 st.markdown("""
@@ -171,12 +171,12 @@ def determine_current_gw(results_df):
 def sync_with_api(api_token, season_str, reset=False):
     """
     API同期
-    reset=True の場合、既存のresultデータを全削除してから取り直す
+    reset=True の場合、既存のresult/oddsデータを全削除してから取り直す
     """
     if not api_token: return False, "Token missing"
     headers = {'X-Auth-Token': api_token}
     
-    # Configのシーズンを使う (デフォルト2025)
+    # URL生成
     season = season_str if season_str else "2025"
     url = f"https://api.football-data.org/v4/competitions/PL/matches?season={season}"
     
@@ -187,10 +187,12 @@ def sync_with_api(api_token, season_str, reset=False):
         matches = res.json().get('matches', [])
         if not matches: return False, f"No matches found for season {season}"
         
-        # リセットモードなら全削除
+        # リセットモードなら全削除 (oddsテーブルもmatch_id依存なので整合性のため消しても良いが、オッズ保持したい場合は注意)
+        # 今回は「Matchesが去年のものになっている」解決のため、試合マスタであるresultをクリアする
         if reset:
-            # resultテーブルをクリア（match_id > 0 で全削除）
-            supabase.table("result").delete().gt("match_id", 0).execute()
+            supabase.table("result").delete().neq("match_id", -1).execute() # 全削除
+            # oddsテーブルも古ければ消したほうがいいが、オッズデータがAPIにない場合困る
+            # ここではresult(日程)を正とするため、resultだけを刷新する
         
         upserts = []
         for m in matches:
@@ -244,7 +246,8 @@ def main():
 
     # 初回自動同期 (Configのシーズンで)
     if 'auto_synced' not in st.session_state:
-        with st.spinner(f"🚀 Syncing Season {season_setting}..."):
+        # リセットはしないが同期はする
+        with st.spinner(f"🚀 Connecting to Season {season_setting}..."):
             sync_with_api(api_token, season_setting)
         st.session_state['auto_synced'] = True
         st.rerun()
@@ -274,7 +277,7 @@ def main():
         """, unsafe_allow_html=True)
 
     st.sidebar.divider()
-    if st.sidebar.button("🔄 Manual Sync"):
+    if st.sidebar.button("🔄 Sync"):
         with st.spinner("Syncing..."):
             sync_with_api(api_token, season_setting)
         st.rerun()
@@ -304,6 +307,7 @@ def main():
         gw_list = []
         if not results.empty:
             gw_unique = results['gw'].unique()
+            # 数値ソート
             gw_list = sorted(gw_unique, key=lambda x: int(x.replace('GW','')) if 'GW' in str(x) else 0)
         
         idx = gw_list.index(current_gw) if current_gw in gw_list else 0
@@ -314,13 +318,14 @@ def main():
         target_matches = results[results['gw'] == sel_gw].sort_values('utc_kickoff')
         
         if target_matches.empty:
-            st.info("No matches found for this GW.")
+            st.info("No matches found.")
         else:
             for _, m in target_matches.iterrows():
                 mid = m['match_id']
                 kickoff = to_jst_str(m['utc_kickoff'])
                 score = f"{int(m['home_score'])} - {int(m['away_score'])}" if pd.notna(m['home_score']) else ""
                 
+                # オッズ取得 (ない場合は - )
                 o_row = odds[odds['match_id'] == mid]
                 oh = o_row.iloc[0]['home_win'] if not o_row.empty else 0
                 od = o_row.iloc[0]['draw'] if not o_row.empty else 0
@@ -348,6 +353,7 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
                     
+                    # ベットフォーム (FINISHED等は除外)
                     if m['status'] not in ['IN_PLAY', 'FINISHED', 'PAUSED']:
                         if not bets.empty: my_bet = bets[(bets['match_id'] == mid) & (bets['user'] == me['username'])]
                         else: my_bet = pd.DataFrame()
@@ -449,14 +455,22 @@ def main():
                         }).execute()
                         st.success("Updated!"); time.sleep(1); st.rerun()
                         
-            # 試合データ強制リセット
-            st.warning("⚠️ Matches Reset")
-            st.write(f"Current Season Setting: **{season_setting}**")
-            if st.button("💥 Reset Matches (Clear & Sync)"):
-                with st.spinner("Deleting old matches and re-syncing..."):
-                    ok, msg = sync_with_api(api_token, season_setting, reset=True)
-                    if ok: st.success(msg); time.sleep(1); st.rerun()
-                    else: st.error(msg)
+            # 試合データ強制リセット機能
+            st.error("⚠️ **DANGER ZONE: Match Data Reset**")
+            st.write("もし試合データが古い場合、ここで強制リセットしてください。")
+            
+            # シーズン選択肢
+            sel_season = st.selectbox("Target Season to Sync", ["2025", "2024", "2026"], index=0)
+            
+            if st.button(f"💥 Force Reset Matches (Season {sel_season})"):
+                with st.spinner(f"Cleaning database & Syncing Season {sel_season}..."):
+                    ok, msg = sync_with_api(api_token, sel_season, reset=True)
+                    if ok:
+                        st.success(f"{msg}. Reloading...")
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error(msg)
 
 # Utils
 def to_jst_str(iso_str):
