@@ -9,15 +9,37 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (Minimalist Typography / Glassmorphism)
+# 0. System Configuration & CSS (Theme Lock & Responsive)
 # ==============================================================================
-st.set_page_config(page_title="Football App V3.8", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V3.9", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
-# Minimalist CSS: Transparent layers, Monospace fonts, No forced input colors
+# Ultimate CSS: Theme Locking & Mobile Robustness
 st.markdown("""
 <style>
-    /* --- Layout --- */
+    /* --- 1. Theme Locking (Force Dark Mode) --- */
+    /* Main App Background */
+    .stApp {
+        background-color: #0e1117 !important;
+        color: #fafafa !important;
+    }
+    
+    /* Input Widgets (Force Dark Background to prevent white glare) */
+    .stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"] {
+        background-color: #262730 !important;
+        color: #fafafa !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
+    }
+    /* Dropdown Menu */
+    ul[data-baseweb="menu"] {
+        background-color: #262730 !important;
+    }
+    /* Labels & Text */
+    p, label, .stMarkdown, h1, h2, h3 {
+        color: #e5e7eb !important;
+    }
+
+    /* --- 2. Layout & Spacing --- */
     .block-container {
         padding-top: 3rem;
         padding-bottom: 5rem;
@@ -26,91 +48,117 @@ st.markdown("""
         padding-right: 0.5rem;
     }
 
-    /* --- Vertical Card Integration (Glassmorphism) --- */
+    /* --- 3. Vertical Card Integration (Glassmorphism) --- */
+    /* Top HTML Part */
     .app-card-top {
         border: 1px solid rgba(255,255,255,0.08);
         border-bottom: none;
         border-radius: 12px 12px 0 0;
-        padding: 20px 20px 10px 20px;
-        background: rgba(255,255,255,0.03); /* Subtle glass effect */
+        padding: 20px 16px 10px 16px;
+        background: rgba(255,255,255,0.03);
         margin-bottom: 0px;
     }
-    
+    /* Bottom Form Part */
     [data-testid="stForm"] {
         border: 1px solid rgba(255,255,255,0.08);
         border-top: none;
         border-radius: 0 0 12px 12px;
-        padding: 0 20px 20px 20px;
+        padding: 0 16px 20px 16px;
         background: rgba(255,255,255,0.015);
         margin-bottom: 24px;
     }
 
-    /* --- Typography & Elements --- */
+    /* --- 4. Responsive Match Card (Flexbox Strategy) --- */
     .card-header {
         display: flex; justify-content: space-between;
-        font-family: 'Courier New', monospace; font-size: 0.8rem; opacity: 0.7;
+        font-family: 'Courier New', monospace; font-size: 0.75rem; opacity: 0.6;
         border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; margin-bottom: 16px;
+        letter-spacing: 1px;
     }
     
-    .matchup-grid {
-        display: grid; grid-template-columns: 1fr auto 1fr;
-        align-items: center; text-align: center; gap: 10px; margin-bottom: 16px;
+    /* Robust Flex Layout for Team Names */
+    .matchup-flex {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        text-align: center;
+        gap: 8px;
+        margin-bottom: 16px;
+    }
+    
+    /* Equal Width Columns: Forces long names to wrap/shrink, keeping center stable */
+    .team-col {
+        flex: 1;
+        width: 0; /* Critical for text-overflow behavior */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
     }
     
     .team-name { 
-        font-weight: 700; font-size: 1.1rem; line-height: 1.3; min-height: 2.4em; 
-        display:flex; align-items:center; justify-content:center; letter-spacing: 0.02em;
+        font-weight: 700; font-size: 1.0rem; line-height: 1.2; 
+        min-height: 2.4em; /* Reserve height for 2 lines */
+        display:flex; align-items:center; justify-content:center;
+        word-wrap: break-word; overflow-wrap: break-word;
     }
     
+    /* Center Score */
+    .score-col {
+        flex: 0 0 auto; /* Do not grow or shrink */
+    }
     .score-box { 
-        font-family: 'Courier New', monospace; font-size: 1.8rem; font-weight: 800; 
-        padding: 0 15px; opacity: 0.9; letter-spacing: 2px;
+        font-family: 'Courier New', monospace; font-size: 1.6rem; font-weight: 800; 
+        padding: 4px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; letter-spacing: 2px;
     }
     
-    /* --- Form Guide (Old -> New) --- */
+    /* Media Query for Mobile Font Sizing */
+    @media (max-width: 600px) {
+        .team-name { font-size: 0.9rem; }
+        .score-box { font-size: 1.4rem; padding: 2px 8px; }
+    }
+
+    /* --- 5. Form Guide (Old -> New) --- */
     .form-container { 
         display: flex; align-items: center; justify-content: center; 
-        gap: 6px; margin-top: 8px; opacity: 0.9; 
+        gap: 4px; margin-top: 8px; opacity: 0.8; 
     }
-    .form-arrow { 
-        font-size: 0.6rem; color: #666; font-family: sans-serif; 
-        text-transform: uppercase; margin: 0 4px; letter-spacing: 1px;
-    }
-    .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; }
-    .form-ha { font-size: 0.55rem; opacity: 0.5; font-weight: bold; margin-bottom: 3px; }
-    .form-icon { font-size: 0.8rem; }
+    .form-arrow { font-size: 0.5rem; opacity: 0.4; text-transform: uppercase; margin: 0 2px; letter-spacing: 1px; }
+    .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; margin: 0 1px;}
+    .form-ha { font-size: 0.5rem; opacity: 0.4; font-weight: bold; margin-bottom: 2px; }
+    .form-mark { font-size: 0.7rem; font-weight: bold; } /* Using text dots instead of emojis if preferred, or icons */
     
-    /* --- Odds --- */
+    /* --- 6. Odds & Info --- */
     .info-row {
         display: flex; justify-content: space-around; background: rgba(0,0,0,0.2);
         padding: 10px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px;
     }
-    .odds-label { font-size: 0.65rem; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; }
-    .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.1rem; }
+    .odds-label { font-size: 0.6rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; }
+    .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
 
-    /* --- Badges --- */
+    /* --- 7. Social Badges --- */
     .social-bets-container { 
-        display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+        display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
         padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);
     }
     .bet-badge {
         display: inline-flex; align-items: center; gap: 6px;
-        background: rgba(255,255,255,0.05); padding: 5px 10px; border-radius: 4px;
-        font-size: 0.75rem; border: 1px solid rgba(255,255,255,0.05);
+        background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 4px;
+        font-size: 0.7rem; border: 1px solid rgba(255,255,255,0.05); color: #ccc;
     }
-    .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); }
+    .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); color: #fff; }
     .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
 
-    /* --- Live & Status --- */
-    @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
-    .live-dot { color: #f87171; animation: pulse 2s infinite; font-weight: bold; margin-right:4px; }
-    .status-msg { text-align: center; opacity: 0.5; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 12px; padding-bottom: 8px; }
-    .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; }
+    /* --- 8. Live & Status --- */
+    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+    .live-dot { color: #f87171; animation: pulse 1.5s infinite; font-weight: bold; margin-right:4px; font-size: 1.2rem; line-height: 0; vertical-align: middle;}
+    .status-msg { text-align: center; opacity: 0.4; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 2px; margin-top: 12px; }
+    .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; }
 
-    /* --- Dashboard Lists (No Charts) --- */
-    .kpi-box { text-align: center; padding: 20px; background: rgba(255,255,255,0.02); border-radius: 8px; }
-    .kpi-label { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; letter-spacing: 2px; }
-    .kpi-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; margin-top: 4px; color: #fff; }
+    /* --- 9. Dashboard (Typography) --- */
+    .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
+    .kpi-label { font-size: 0.65rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px;}
+    .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; color: #fff; line-height: 1; }
     
     .rank-list-item { 
         display: flex; justify-content: space-between; padding: 12px 0; 
@@ -119,19 +167,19 @@ st.markdown("""
     .rank-pos { color: #fbbf24; font-weight: bold; margin-right: 12px; }
     .prof-amt { color: #4ade80; font-weight: bold; }
 
-    /* --- History Cards --- */
+    /* --- 10. History --- */
     .hist-card { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
 
-    /* Hide Streamlit Branding */
+    /* Clean up */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 1. Database & Config Access (Safe Fetch)
+# 1. Database & Config Access
 # ==============================================================================
 @st.cache_resource
 def get_supabase():
@@ -142,7 +190,7 @@ def get_supabase():
 supabase = get_supabase()
 
 def fetch_all_data():
-    """Fetch all tables safely."""
+    """Fetch all tables safely"""
     try:
         def get_df_safe(table, expected_cols):
             try:
@@ -154,13 +202,12 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at']) # [cite: 3, 4]
-        odds = get_df_safe("odds", ['match_id','home_win','draw','away_win']) # [cite: 3, 6]
-        results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score']) # [cite: 3, 5]
-        bm_log = get_df_safe("bm_log", ['gw','bookmaker']) # [cite: 3, 6]
+        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at'])
+        odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
+        results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score'])
+        bm_log = get_df_safe("bm_log", ['gw','bookmaker'])
         users = get_df_safe("users", ['username','password','role','team'])
-        config = get_df_safe("config", ['key','value']) # [cite: 3, 7]
-        
+        config = get_df_safe("config", ['key','value'])
         return bets, odds, results, bm_log, users, config
     except Exception as e:
         st.error(f"System Error: {e}")
@@ -183,7 +230,7 @@ def get_config_value(config_df, key, default):
     return default
 
 # ==============================================================================
-# 2. Business Logic (V3.8 Specifications)
+# 2. Business Logic
 # ==============================================================================
 
 def to_jst(iso_str):
@@ -197,14 +244,13 @@ def to_jst(iso_str):
 def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     """
     Generate Form Guide HTML (Single Line).
-    Order: Old (Left) -> New (Right) 
+    Order: Old (Left) -> New (Right)
     """
     if results_df.empty: return "-"
     if 'dt_jst' not in results_df.columns:
         results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
     
     season_start = pd.Timestamp("2025-07-01", tz=JST)
-    # Get 5 most recent matches (Newest first)
     past = results_df[
         (results_df['dt_jst'] >= season_start) &
         (results_df['status'] == 'FINISHED') & 
@@ -212,13 +258,13 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
         ((results_df['home'] == team_name) | (results_df['away'] == team_name))
     ].sort_values('dt_jst', ascending=False).head(5)
     
-    if past.empty: return '<span style="opacity:0.3">-</span>'
+    if past.empty: return '<span style="opacity:0.2">-</span>'
 
     # Reverse to make it Old -> New
     past = past.iloc[::-1]
 
-    # Build HTML as a single concatenated string
-    html_parts = ['<div class="form-container"><span class="form-arrow">Old &larr;</span>']
+    # Build HTML string (No newlines for Streamlit compatibility)
+    html_parts = ['<div class="form-container"><span class="form-arrow">OLD</span>']
     for _, g in past.iterrows():
         is_home = (g['home'] == team_name)
         ha_label = "H" if is_home else "A"
@@ -226,17 +272,18 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
         h = int(g['home_score']) if pd.notna(g['home_score']) else 0
         a = int(g['away_score']) if pd.notna(g['away_score']) else 0
         
-        icon = '❌'
-        if h == a: icon = '<span style="opacity:0.6">▲</span>'
-        elif (is_home and h > a) or (not is_home and a > h): icon = '🔵'
+        # Typography based icons
+        icon = '<span style="color:#f87171">●</span>' # Lose
+        if h == a: icon = '<span style="color:#9ca3af">●</span>' # Draw
+        elif (is_home and h > a) or (not is_home and a > h): icon = '<span style="color:#4ade80">●</span>' # Win
         
-        html_parts.append(f'<div class="form-item"><span class="form-ha">{ha_label}</span><span class="form-icon">{icon}</span></div>')
+        html_parts.append(f'<div class="form-item"><span class="form-ha">{ha_label}</span><span class="form-mark">{icon}</span></div>')
     
-    html_parts.append('<span class="form-arrow">&rarr; New</span></div>')
+    html_parts.append('<span class="form-arrow">NEW</span></div>')
     return "".join(html_parts)
 
 def calculate_stats(bets_df, bm_log_df, users_df):
-    """Zero-Sum P&L for settled bets """
+    """Zero-Sum P&L for settled bets"""
     if users_df.empty: return {}, {}
     stats = {u: {'balance': 0, 'wins': 0, 'total': 0, 'potential': 0} for u in users_df['username'].unique()}
     
@@ -254,7 +301,6 @@ def calculate_stats(bets_df, bm_log_df, users_df):
         res = str(b.get('result', '')).upper()
         
         is_settled = (res in ['WIN', 'LOSE'])
-        
         stake = float(b['stake']) if b['stake'] else 0
         odds = float(b['odds']) if b['odds'] else 1.0
         
@@ -267,7 +313,6 @@ def calculate_stats(bets_df, bm_log_df, users_df):
             pnl = (stake * odds) - stake if res == 'WIN' else -stake
             stats[user]['balance'] += int(pnl)
             if res == 'WIN': stats[user]['wins'] += 1
-            
             if bm and bm in stats and bm != user:
                 stats[bm]['balance'] -= int(pnl)
         else:
@@ -276,17 +321,12 @@ def calculate_stats(bets_df, bm_log_df, users_df):
     return stats, bm_map
 
 def calculate_profitable_clubs(bets_df, results_df):
-    """
-    Dashboard Logic: Calculate Profitable Clubs (TOP 3) per user.
-    Returns dict: {user: [{'team': 'Arsenal', 'profit': 15000}, ...]}
-    """
+    """Top 3 Profitable Clubs per user"""
     if bets_df.empty or results_df.empty: return {}
-    
     wins = bets_df[bets_df['result'] == 'WIN'].copy()
     if wins.empty: return {}
     
     user_club_pnl = {} 
-    
     for _, b in wins.iterrows():
         user = b['user']
         mid = b['match_id']
@@ -309,11 +349,10 @@ def calculate_profitable_clubs(bets_df, results_df):
     for u, clubs in user_club_pnl.items():
         sorted_clubs = sorted(clubs.items(), key=lambda x: x[1], reverse=True)[:3]
         final_ranking[u] = sorted_clubs
-        
     return final_ranking
 
 def calculate_live_pnl(bets_df, results_df, bm_map, users_df, target_gw):
-    """Live P&L """
+    """Live P&L Simulation"""
     base_stats, _ = calculate_stats(bets_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
     live_data = []
 
@@ -346,7 +385,7 @@ def calculate_live_pnl(bets_df, results_df, bm_map, users_df, target_gw):
     return pd.DataFrame(live_data).sort_values('Total', ascending=False)
 
 def get_strict_target_gw(results_df):
-    """Strict Future Mode """
+    """Strict Future Mode"""
     if results_df.empty: return "GW1"
     now_jst = datetime.datetime.now(JST)
     if 'dt_jst' not in results_df.columns: results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
@@ -363,7 +402,7 @@ def get_strict_target_gw(results_df):
     return "GW1"
 
 def check_and_assign_bm(target_gw, bm_log_df, users_df):
-    """Fairness Algorithm """
+    """Fairness Algorithm"""
     if users_df.empty: return
     nums = "".join([c for c in target_gw if c.isdigit()])
     existing = False
@@ -446,9 +485,9 @@ def main():
     role = st.session_state.get('role', 'user')
     token = get_api_token(config)
 
-    if 'v38_synced' not in st.session_state:
+    if 'v39_synced' not in st.session_state:
         with st.spinner("Syncing..."): sync_api(token)
-        st.session_state['v38_synced'] = True; st.rerun()
+        st.session_state['v39_synced'] = True; st.rerun()
 
     target_gw = get_strict_target_gw(results)
     check_and_assign_bm(target_gw, bm_log, users)
@@ -479,14 +518,13 @@ def main():
     with t1:
         c_h1, c_h2 = st.columns([3, 1])
         c_h1.markdown(f"### {target_gw}")
-        if is_bm: c_h2.markdown(f"<span class='bm-badge'>👑 YOU ARE BM</span>", unsafe_allow_html=True)
+        if is_bm: c_h2.markdown(f"<span class='bm-badge'>YOU ARE BM</span>", unsafe_allow_html=True)
         else: c_h2.markdown(f"<span class='bm-badge'>BM: {current_bm}</span>", unsafe_allow_html=True)
 
         if not results.empty:
             matches = results[results['gw'] == target_gw].copy()
             if not matches.empty:
                 matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
-                # Strict Future Filter
                 matches = matches[matches['dt_jst'] >= pd.Timestamp("2025-07-01", tz=JST)].sort_values('dt_jst')
                 
                 if not matches.empty:
@@ -505,8 +543,6 @@ def main():
                     od = o_row.iloc[0]['draw'] if not o_row.empty else 0
                     oa = o_row.iloc[0]['away_win'] if not o_row.empty else 0
                     
-                    form_html = get_recent_form_html(f"{m['home']} vs {m['away']}", results, m['dt_jst']) # Use team name
-                    # Re-render properly for Home and Away
                     form_h = get_recent_form_html(m['home'], results, m['dt_jst'])
                     form_a = get_recent_form_html(m['away'], results, m['dt_jst'])
                     
@@ -517,9 +553,8 @@ def main():
                     a_s = int(m['away_score']) if pd.notna(m['away_score']) else 0
                     score_disp = f"{h_s}-{a_s}" if m['status'] != 'SCHEDULED' else "vs"
 
-                    # Card Top
-                    card_html = f"""<div class="app-card-top"><div class="card-header"><span>⏱ {dt_str}</span><span>{m['status']}</span></div><div class="matchup-grid"><div class="team-col"><span class="team-name">{m['home']}</span>{form_h}</div><div class="team-col"><span class="score-box">{score_disp}</span></div><div class="team-col"><span class="team-name">{m['away']}</span>{form_a}</div></div><div class="info-row"><div class="odds-item"><div class="odds-label">HOME</div><div class="odds-value">{oh if oh else '-'}</div></div><div class="odds-item"><div class="odds-label">DRAW</div><div class="odds-value">{od if od else '-'}</div></div><div class="odds-item"><div class="odds-label">AWAY</div><div class="odds-value">{oa if oa else '-'}</div></div></div>"""
-                    
+                    # Card Top (HTML)
+                    card_html = f"""<div class="app-card-top"><div class="card-header"><span>⏱ {dt_str}</span><span>{m['status']}</span></div><div class="matchup-flex"><div class="team-col"><span class="team-name">{m['home']}</span>{form_h}</div><div class="score-col"><span class="score-box">{score_disp}</span></div><div class="team-col"><span class="team-name">{m['away']}</span>{form_a}</div></div><div class="info-row"><div class="odds-item"><div class="odds-label">HOME</div><div class="odds-value">{oh if oh else '-'}</div></div><div class="odds-item"><div class="odds-label">DRAW</div><div class="odds-value">{od if od else '-'}</div></div><div class="odds-item"><div class="odds-label">AWAY</div><div class="odds-value">{oa if oa else '-'}</div></div></div>"""
                     if not match_bets.empty:
                         badges = ""
                         for _, b in match_bets.iterrows():
@@ -530,7 +565,7 @@ def main():
                     card_html += "</div>"
                     st.markdown(card_html, unsafe_allow_html=True)
 
-                    # Card Bottom
+                    # Card Bottom (Form)
                     is_open = m['status'] not in ['IN_PLAY', 'FINISHED', 'PAUSED'] and oh > 0 and not gw_locked
                     if not is_open:
                         msg = "CLOSED"
@@ -634,7 +669,6 @@ def main():
     with t4:
         st.markdown("### 🏆 DASHBOARD")
         
-        # 1. Main KPI
         my_s = stats.get(me, {'balance':0, 'wins':0, 'total':0})
         win_rate = (my_s['wins']/my_s['total']*100) if my_s['total'] else 0
         c1, c2, c3 = st.columns(3)
@@ -644,7 +678,6 @@ def main():
         
         st.markdown("---")
         
-        # 2. Profitable Clubs (TOP 3)
         st.markdown("#### 💰 PROFITABLE CLUBS")
         prof_data = calculate_profitable_clubs(bets, results)
         if prof_data:
@@ -655,14 +688,10 @@ def main():
                     if clubs:
                         for j, (team, amt) in enumerate(clubs):
                             st.markdown(f"<div class='rank-list-item'><span class='rank-pos'>{j+1}.</span> <span style='flex:1'>{team}</span> <span class='prof-amt'>+¥{amt:,}</span></div>", unsafe_allow_html=True)
-                    else:
-                        st.caption("No wins yet.")
-        else:
-            st.info("No profitable data available yet.")
+                    else: st.caption("No wins yet.")
+        else: st.info("No data.")
 
         st.markdown("---")
-
-        # 3. BM Fairness
         st.markdown("#### ⚖️ BM STATS")
         if not bm_log.empty:
             bm_counts = bm_log['bookmaker'].value_counts().reset_index()
@@ -684,16 +713,13 @@ def main():
                         sel_m_name = st.selectbox("Match", list(m_opts.keys()))
                         sel_m_id = m_opts[sel_m_name]
                         curr_o = odds[odds['match_id'] == sel_m_id]
-                        
                         def_h = float(curr_o.iloc[0]['home_win']) if not curr_o.empty else 0.0
                         def_d = float(curr_o.iloc[0]['draw']) if not curr_o.empty else 0.0
                         def_a = float(curr_o.iloc[0]['away_win']) if not curr_o.empty else 0.0
-                        
                         c1, c2, c3 = st.columns(3)
                         new_h = c1.number_input("H", 0.0, 100.0, def_h, 0.01)
                         new_d = c2.number_input("D", 0.0, 100.0, def_d, 0.01)
                         new_a = c3.number_input("A", 0.0, 100.0, def_a, 0.01)
-                        
                         if st.button("SAVE ODDS", use_container_width=True):
                             supabase.table("odds").upsert({"match_id": sel_m_id, "home_win": new_h, "draw": new_d, "away_win": new_a}).execute()
                             st.success("Updated"); time.sleep(1); st.rerun()
