@@ -11,16 +11,15 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS (Native Dark Mode via config.toml)
 # ==============================================================================
-st.set_page_config(page_title="Football App V4.2", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V4.3", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 # Clean CSS: Focus only on Layout & Glassmorphism.
-# Colors are handled by .streamlit/config.toml (Native Dark Mode).
 st.markdown("""
 <style>
-    /* --- Layout --- */
+    /* --- Layout Fix: Increased top padding for mobile header safety --- */
     .block-container {
-        padding-top: 2rem;
+        padding-top: 4.5rem; /* Sufficient space for Syncing/Running status */
         padding-bottom: 6rem;
         max-width: 100%;
         padding-left: 0.5rem;
@@ -324,13 +323,13 @@ def calculate_profitable_clubs(bets_df, results_df):
 def calculate_live_pnl_and_dream(bets_df, results_df, bm_map, users_df, target_gw):
     """
     Live P&L + Dream Logic (Theoretical Max Profit for GW).
-    Dream = Sum((Stake*Odds)-Stake) for ALL bets in GW, regardless of result.
+    Fix: Use bets_df argument instead of global 'bets'
     """
     base_stats, _ = calculate_stats(bets_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
     live_data = []
 
     # Filter bets for target GW
-    gw_bets = bets[bets['gw'] == target_gw].copy() if not bets.empty else pd.DataFrame()
+    gw_bets = bets_df[bets_df['gw'] == target_gw].copy() if not bets_df.empty else pd.DataFrame()
     
     # Init Simulation Data
     sim_pnl = {u: 0 for u in users_df['username'].unique()}
@@ -469,9 +468,9 @@ def main():
     role = st.session_state.get('role', 'user')
     token = get_api_token(config)
 
-    if 'v42_synced' not in st.session_state:
+    if 'v43_synced' not in st.session_state:
         with st.spinner("Syncing..."): sync_api(token)
-        st.session_state['v42_synced'] = True; st.rerun()
+        st.session_state['v43_synced'] = True; st.rerun()
 
     target_gw = get_strict_target_gw(results)
     check_and_assign_bm(target_gw, bm_log, users)
