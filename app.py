@@ -12,7 +12,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V5.3", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V5.3.1", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -157,6 +157,7 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     html_parts = ['<div class="form-container"><span class="form-arrow">OLD</span>']
     for _, g in past.iterrows():
         is_home = (g['home'] == team_name)
+        ha_label = "H" if is_home else "A" # --- FIXED: Defined ha_label here ---
         h = int(g['home_score']) if pd.notna(g['home_score']) else 0
         a = int(g['away_score']) if pd.notna(g['away_score']) else 0
         icon = '<span style="color:#f87171">●</span>' 
@@ -169,7 +170,6 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
 def settle_bets_force():
     """
     FORCE UPDATE: Updates 'result', 'payout', 'net' for ALL finished matches where net is NULL/0.
-    This fixes the 'NULL' issue by detecting any Finished match with incomplete bet data.
     """
     try:
         # 1. Fetch RAW data
@@ -194,7 +194,6 @@ def settle_bets_force():
             match_status = str(row.get('status', '')).strip().upper()
             
             # Check if Net is None, NaN, or if Result is empty but match is finished
-            # We want to force update if the match is finished.
             net_val = row.get('net')
             is_net_missing = pd.isna(net_val) or str(net_val).strip() == ''
             
@@ -421,6 +420,26 @@ def sync_api(api_token):
         return True
     except: return False
 
+def determine_bet_outcome(bet_row, match_row):
+    """
+    Pure Logic: Returns 'WIN', 'LOSE', or 'OPEN' based on data provided.
+    """
+    # 1. Check DB first (Fast Path)
+    db_res = str(bet_row.get('result', '')).strip().upper()
+    if db_res in ['WIN', 'LOSE']: return db_res
+    
+    # 2. Check Match Status (Dynamic Path)
+    status = str(match_row.get('status', 'SCHEDULED')).strip().upper()
+    if status == 'FINISHED':
+        h_s = int(match_row['home_score']) if pd.notna(match_row['home_score']) else 0
+        a_s = int(match_row['away_score']) if pd.notna(match_row['away_score']) else 0
+        outcome = "DRAW"
+        if h_s > a_s: outcome = "HOME"
+        elif a_s > h_s: outcome = "AWAY"
+        user_pick = str(bet_row['pick']).strip().upper()
+        return 'WIN' if user_pick == outcome else 'LOSE'
+    return 'OPEN'
+
 # ==============================================================================
 # 3. Main Application
 # ==============================================================================
@@ -432,13 +451,11 @@ def main():
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
-    # Force Settlement ON EVERY LOAD (Safest for now to fix data)
-    # Optimized to only hit API once per session, but settle tries every time
-    if 'v53_api_synced' not in st.session_state:
+    # Force Settlement ON EVERY LOAD
+    if 'v531_api_synced' not in st.session_state:
         with st.spinner("Syncing API..."): sync_api(token)
-        st.session_state['v53_api_synced'] = True
+        st.session_state['v531_api_synced'] = True
     
-    # Force DB write-back for NULLs
     count = settle_bets_force()
     if count > 0:
         st.toast(f"✅ Auto-Settled {count} bets!", icon="💰")
