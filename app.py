@@ -12,14 +12,19 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V5.8", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V5.9", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
 <style>
+    /* Layout & Base */
     .block-container { padding-top: 4.5rem; padding-bottom: 6rem; max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
+    
+    /* Cards */
     .app-card-top { border: 1px solid rgba(255,255,255,0.1); border-bottom: none; border-radius: 12px 12px 0 0; padding: 20px 16px 10px 16px; background: rgba(255,255,255,0.03); margin-bottom: 0px; }
     [data-testid="stForm"] { border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 12px 12px; padding: 0 16px 20px 16px; background: rgba(255,255,255,0.015); margin-bottom: 24px; }
+    
+    /* Match Details */
     .card-header { display: flex; justify-content: space-between; font-family: 'Courier New', monospace; font-size: 0.75rem; opacity: 0.7; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; margin-bottom: 16px; letter-spacing: 1px; }
     .matchup-flex { display: flex; align-items: center; justify-content: space-between; text-align: center; gap: 8px; margin-bottom: 16px; }
     .team-col { flex: 1; width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
@@ -27,11 +32,15 @@ st.markdown("""
     .score-col { flex: 0 0 auto; }
     .score-box { font-family: 'Courier New', monospace; font-size: 1.6rem; font-weight: 800; padding: 4px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; letter-spacing: 2px; }
     @media (max-width: 600px) { .team-name { font-size: 0.9rem; } .score-box { font-size: 1.4rem; padding: 2px 8px; } }
+    
+    /* Form Guide */
     .form-container { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; opacity: 0.8; }
     .form-arrow { font-size: 0.5rem; opacity: 0.5; text-transform: uppercase; margin: 0 2px; letter-spacing: 1px; }
     .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; margin: 0 1px;}
     .form-ha { font-size: 0.5rem; opacity: 0.5; font-weight: bold; margin-bottom: 2px; }
     .form-mark { font-size: 0.7rem; font-weight: bold; } 
+    
+    /* Odds & Bets */
     .info-row { display: flex; justify-content: space-around; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; }
     .odds-label { font-size: 0.6rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; }
     .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
@@ -41,6 +50,8 @@ st.markdown("""
     .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
     .bb-res-win { color: #4ade80; font-weight: bold; margin-left: 4px; }
     .bb-res-lose { color: #f87171; font-weight: bold; margin-left: 4px; }
+    
+    /* Dashboard & Admin */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
     .kpi-label { font-size: 0.65rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px;}
     .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; line-height: 1; }
@@ -50,17 +61,26 @@ st.markdown("""
     .status-msg { text-align: center; opacity: 0.5; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 12px; }
     .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; }
     .live-dot { color: #f87171; animation: pulse 1.5s infinite; font-weight: bold; margin-right:4px; font-size: 1.2rem; line-height: 0; vertical-align: middle;}
-    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+    
+    /* History & Summary */
     .hist-card { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
+    
+    /* Summary Header */
+    .summary-box { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; }
+    .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
+    .summary-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; }
+    
+    .summary-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 20px; }
+    .summary-item { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; text-align: center; min-width: 110px; flex: 1; }
+    .s-user { font-size: 0.75rem; opacity: 0.8; margin-bottom: 4px; font-weight:bold;}
+    .s-amt { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; }
+    
     .budget-header { font-family: 'Courier New', monospace; text-align: center; margin-bottom: 20px; padding: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; font-size: 0.9rem; }
-    /* Summary Header for History */
-    .summary-box { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; text-align: center; margin-bottom: 16px; }
-    .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
-    .summary-val { font-size: 1.8rem; font-weight: 800; font-family: 'Courier New', monospace; }
-    .summary-grid { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; }
-    .summary-item { min-width: 100px; flex: 1; background: rgba(255,255,255,0.03); border-radius: 6px; padding: 10px; text-align: center; border: 1px solid rgba(255,255,255,0.05); }
+    
+    /* Animations */
+    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
@@ -179,8 +199,8 @@ def extract_gw_num(gw_str):
 
 def settle_bets_date_aware():
     """
-    DATE-BASED SCOPED UPDATE (V5.7):
-    Identifies 'Current GW' using actual TIMESTAMP.
+    DATE-BASED SCOPED UPDATE:
+    Updates matches in range [Current-10 to Current+1].
     """
     try:
         b_res = supabase.table("bets").select("*").execute()
@@ -288,18 +308,15 @@ def calculate_profitable_clubs_fixed(bets_df, results_df):
     results_safe = results_df.rename(columns={'status': 'match_status'})
     merged = pd.merge(bets_df, results_safe, on='match_id', how='inner')
     user_club_pnl = {}
-    
     for _, row in merged.iterrows():
         if str(row.get('result', '')).strip().upper() == 'WIN':
             user = row['user']
             pick = row['pick']
             team = row['home'] if pick == 'HOME' else (row['away'] if pick == 'AWAY' else None)
             net = float(row['net']) if pd.notna(row['net']) else 0
-            
             if team:
                 if user not in user_club_pnl: user_club_pnl[user] = {}
                 user_club_pnl[user][team] = user_club_pnl[user].get(team, 0) + int(net)
-                
     final_ranking = {}
     for u, clubs in user_club_pnl.items():
         sorted_clubs = sorted(clubs.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -428,11 +445,8 @@ def sync_api(api_token):
     except: return False
 
 def determine_bet_outcome(bet_row, match_row):
-    # 1. Check DB first (Fast Path)
     db_res = str(bet_row.get('result', '')).strip().upper()
     if db_res in ['WIN', 'LOSE']: return db_res
-    
-    # 2. Check Match Status (Dynamic Path)
     status = str(match_row.get('match_status', 'SCHEDULED')).strip().upper()
     if status == 'FINISHED':
         h_s = int(match_row['home_score']) if pd.notna(match_row['home_score']) else 0
@@ -455,10 +469,10 @@ def main():
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
-    if 'v58_api_synced' not in st.session_state:
+    if 'v59_api_synced' not in st.session_state:
         with st.spinner("Syncing API & Auto-Settling (Date-Aware)..."): 
             sync_api(token)
-            st.session_state['v58_api_synced'] = True
+            st.session_state['v59_api_synced'] = True
     
     count, scope_desc = settle_bets_date_aware()
     if count > 0:
@@ -653,19 +667,17 @@ def main():
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
             
-            # Safe Merge for Display
             results_safe = results.rename(columns={'status': 'match_status'})
             hist = pd.merge(hist, results_safe[['match_id', 'home', 'away', 'match_status']], on='match_id', how='left')
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
             
-            # --- V5.8: Summary Header Calculation ---
+            # --- V5.9 UI FIX: Beautiful Summary Grid ---
             if not hist.empty:
                 total_net = hist['net'].sum()
                 
-                # Show summary
                 if sel_u != "All":
-                    # Specific User View
+                    # Specific User View (Big Card)
                     col_str = "#4ade80" if total_net >= 0 else "#f87171"
                     sign = "+" if total_net >= 0 else ""
                     st.markdown(f"""
@@ -675,7 +687,7 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
                 else:
-                    # All Users View (Breakdown)
+                    # All Users View (Flex Grid)
                     user_sums = hist.groupby('user')['net'].sum().reset_index()
                     user_sums = user_sums.sort_values('net', ascending=False)
                     
@@ -686,13 +698,13 @@ def main():
                         u_sign = "+" if u_net >= 0 else ""
                         html_items += f"""
                         <div class="summary-item">
-                            <div style="font-size:0.7rem; opacity:0.8">{r['user']}</div>
-                            <div style="font-weight:bold; color:{u_col}">{u_sign}¥{int(u_net):,}</div>
+                            <div class="s-user">{r['user']}</div>
+                            <div class="s-amt" style="color:{u_col}">{u_sign}¥{int(u_net):,}</div>
                         </div>
                         """
                     st.markdown(f"""<div class="summary-grid">{html_items}</div>""", unsafe_allow_html=True)
             
-            st.markdown("---") # Separator
+            st.markdown("---") 
             
             for _, b in hist.iterrows():
                 db_res = str(b.get('result', '')).strip().upper()
