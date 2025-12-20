@@ -12,10 +12,10 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS (Native Dark Mode via config.toml)
 # ==============================================================================
-st.set_page_config(page_title="Football App V5.1", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V5.2", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
-# Clean CSS: Focus on Layout & Glassmorphism.
+# Clean CSS
 st.markdown("""
 <style>
     .block-container { padding-top: 4.5rem; padding-bottom: 6rem; max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
@@ -73,7 +73,7 @@ supabase = get_supabase()
 
 def fetch_all_data():
     """
-    Fetch all tables safely and ENFORCE NUCLEAR TYPE CONVERSION (SSOT 5.1).
+    Fetch all tables safely and ENFORCE NUCLEAR TYPE CONVERSION.
     """
     try:
         def get_df_safe(table, expected_cols):
@@ -86,17 +86,22 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at'])
+        # Added 'payout' and 'net' to fetched columns
+        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','payout','net','gw','placed_at'])
         odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
         results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score'])
         bm_log = get_df_safe("bm_log", ['gw','bookmaker'])
         users = get_df_safe("users", ['username','password','role','team'])
         config = get_df_safe("config", ['key','value'])
         
-        # --- NUCLEAR CONVERSION PIPELINE (SSOT 5.1) ---
+        # --- NUCLEAR CONVERSION PIPELINE ---
+        # 1. to_numeric (Force weird strings/floats to numbers)
+        # 2. fillna(0) + astype(int) (Remove decimals: 123.0 -> 123)
+        # 3. astype(str) (Final unification: 123 -> "123")
         for df in [bets, results, odds]:
             if not df.empty and 'match_id' in df.columns:
                 df['match_id'] = pd.to_numeric(df['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
+                # Remove invalid IDs
                 df = df[df['match_id'] != '0']
 
         # --- String Sanitization ---
@@ -170,33 +175,12 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     html_parts.append('<span class="form-arrow">NEW</span></div>')
     return "".join(html_parts)
 
-def determine_bet_outcome(bet_row, match_row):
-    """
-    Pure Logic: Returns 'WIN', 'LOSE', or 'OPEN' based on data provided.
-    """
-    # 1. Check DB first (Fast Path)
-    db_res = str(bet_row.get('result', '')).strip().upper()
-    if db_res in ['WIN', 'LOSE']: return db_res
-    
-    # 2. Check Match Status (Dynamic Path)
-    status = str(match_row.get('status', 'SCHEDULED')).strip().upper()
-    if status == 'FINISHED':
-        h_s = int(match_row['home_score']) if pd.notna(match_row['home_score']) else 0
-        a_s = int(match_row['away_score']) if pd.notna(match_row['away_score']) else 0
-        outcome = "DRAW"
-        if h_s > a_s: outcome = "HOME"
-        elif a_s > h_s: outcome = "AWAY"
-        user_pick = str(bet_row['pick']).strip().upper()
-        return 'WIN' if user_pick == outcome else 'LOSE'
-    return 'OPEN'
-
 def settle_bets_persistent():
     """
-    CRITICAL: Updates DB 'bets' table result column based on finished matches.
-    Run this AFTER syncing results API.
+    CRITICAL: Updates DB 'bets' table result/payout/net based on finished matches.
     """
     try:
-        # 1. Fetch RAW data (no cache) to act on latest state
+        # 1. Fetch RAW data (no cache)
         b_res = supabase.table("bets").select("*").execute()
         r_res = supabase.table("result").select("*").execute()
         
@@ -205,7 +189,7 @@ def settle_bets_persistent():
         df_b = pd.DataFrame(b_res.data)
         df_r = pd.DataFrame(r_res.data)
         
-        # Nuclear Conversion for ID matching
+        # Nuclear Conversion for ID matching in this function
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         
@@ -214,24 +198,43 @@ def settle_bets_persistent():
         
         updates_count = 0
         
-        # Scan for UNSETTLED bets in FINISHED matches
         for _, row in merged.iterrows():
             curr_res = str(row.get('result', '')).strip().upper()
             match_status = str(row.get('status', '')).strip().upper()
             
-            # Only target Open bets where match is Finished
+            # Target: Unsettled bets (result is empty/null/open) AND Match is Finished
             if curr_res not in ['WIN', 'LOSE'] and match_status == 'FINISHED':
-                # Calculate Outcome
                 h_s = int(row['home_score'])
                 a_s = int(row['away_score'])
+                
+                # Determine Outcome
                 outcome = "DRAW"
                 if h_s > a_s: outcome = "HOME"
                 elif a_s > h_s: outcome = "AWAY"
                 
-                final_res = 'WIN' if str(row['pick']).strip().upper() == outcome else 'LOSE'
+                bet_pick = str(row['pick']).strip().upper()
+                final_res = 'WIN' if bet_pick == outcome else 'LOSE'
                 
-                # WRITE BACK TO DB
-                supabase.table("bets").update({"result": final_res}).eq("key", row['key']).execute()
+                # Calculate Money
+                stake = float(row['stake']) if row['stake'] else 0
+                odds = float(row['odds']) if row['odds'] else 1.0
+                payout = 0
+                net = 0
+                
+                if final_res == 'WIN':
+                    payout = int(stake * odds)
+                    net = int(payout - stake)
+                else:
+                    payout = 0
+                    net = int(-stake)
+                
+                # WRITE BACK TO DB (Result, Payout, Net)
+                supabase.table("bets").update({
+                    "result": final_res,
+                    "payout": payout,
+                    "net": net
+                }).eq("key", row['key']).execute()
+                
                 updates_count += 1
                 
         return updates_count
@@ -241,7 +244,7 @@ def settle_bets_persistent():
 
 def calculate_stats(bets_df, results_df, bm_log_df, users_df):
     """
-    Stats calculation primarily trusting the 'result' column now.
+    Calculate Stats using DB 'net' column for settled bets, and simulation for In-Play.
     """
     if users_df.empty: return {}, {}
     stats = {u: {'balance': 0, 'wins': 0, 'total': 0, 'potential': 0} for u in users_df['username'].unique()}
@@ -253,45 +256,69 @@ def calculate_stats(bets_df, results_df, bm_log_df, users_df):
 
     if bets_df.empty: return stats, bm_map
 
-    # Merge for safety, but rely on DB result
+    # We need match info to check In-Play status
     merged = pd.merge(bets_df, results_df[['match_id', 'status', 'home_score', 'away_score']], on='match_id', how='left')
 
     for _, b in merged.iterrows():
         user = b['user']
         if user not in stats: continue
         
-        outcome = determine_bet_outcome(b, b) # Uses DB result if present
+        # 1. DB Values
+        db_res = str(b.get('result', '')).strip().upper()
+        db_net = float(b['net']) if pd.notna(b['net']) and b['net'] != '' else 0
         stake = float(b['stake']) if b['stake'] else 0
         odds = float(b['odds']) if b['odds'] else 1.0
         
-        nums = "".join([c for c in str(b['gw']) if c.isdigit()])
-        gw_key = f"GW{nums}"
+        gw_key = f"GW{''.join([c for c in str(b['gw']) if c.isdigit()])}"
         bm = bm_map.get(gw_key)
         
-        if outcome in ['WIN', 'LOSE']:
+        if db_res in ['WIN', 'LOSE']:
+            # Settled in DB
             stats[user]['total'] += 1
-            pnl = (stake * odds) - stake if outcome == 'WIN' else -stake
-            stats[user]['balance'] += int(pnl)
-            if outcome == 'WIN': stats[user]['wins'] += 1
-            if bm and bm in stats and bm != user: stats[bm]['balance'] -= int(pnl)
+            stats[user]['balance'] += int(db_net)
+            if db_res == 'WIN': stats[user]['wins'] += 1
+            if bm and bm in stats and bm != user: stats[bm]['balance'] -= int(db_net)
         else:
+            # Open - Check if In-Play simulation is needed
+            # (Note: Finished matches should have been settled by settle_bets_persistent, 
+            # so here we mostly handle Scheduled or In-Play)
             stats[user]['potential'] += int((stake * odds) - stake)
+
     return stats, bm_map
 
-def calculate_profitable_clubs(bets_df, results_df):
+def calculate_profitable_clubs(bets_df):
+    """Uses DB 'result' and 'net' directly"""
+    if bets_df.empty: return {}
+    # Filter for Wins only
+    wins = bets_df[bets_df['result'] == 'WIN'].copy()
+    if wins.empty: return {}
+    
+    # We need team names, so merge with results is still good, or parse match string if available
+    # Let's assume we need to merge to get proper home/away team names if not in bets
+    # Actually logic in V4 relied on results merge. Let's keep it safe.
+    # But wait, we don't have results_df here? Ah, passing it would be better.
+    # For now, let's assume caller handles logic or we skip this optimization.
+    # Reverting to reliable logic:
+    return {} # Placeholder if we don't pass results. 
+    # To fix properly, we need results_df passed to this function. 
+    # Updating logic below in main to pass it.
+
+def calculate_profitable_clubs_fixed(bets_df, results_df):
     if bets_df.empty or results_df.empty: return {}
     merged = pd.merge(bets_df, results_df, on='match_id', how='inner')
-    user_club_pnl = {} 
+    user_club_pnl = {}
+    
     for _, row in merged.iterrows():
-        outcome = determine_bet_outcome(row, row)
-        if outcome == 'WIN':
+        if row['result'] == 'WIN':
             user = row['user']
             pick = row['pick']
             team = row['home'] if pick == 'HOME' else (row['away'] if pick == 'AWAY' else None)
+            net = float(row['net']) if pd.notna(row['net']) else 0
+            
             if team:
                 if user not in user_club_pnl: user_club_pnl[user] = {}
-                profit = (float(row['stake']) * float(row['odds'])) - float(row['stake'])
-                user_club_pnl[user][team] = user_club_pnl[user].get(team, 0) + int(profit)
+                user_club_pnl[user][team] = user_club_pnl[user].get(team, 0) + int(net)
+                
     final_ranking = {}
     for u, clubs in user_club_pnl.items():
         sorted_clubs = sorted(clubs.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -299,7 +326,9 @@ def calculate_profitable_clubs(bets_df, results_df):
     return final_ranking
 
 def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, target_gw):
+    # Base Stats (Includes Settled DB values)
     base_stats, _ = calculate_stats(bets_df, results_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
+    
     gw_total_pnl = {u: 0 for u in users_df['username'].unique()} 
     dream_profit = {u: 0 for u in users_df['username'].unique()}
     inplay_sim_only = {u: 0 for u in users_df['username'].unique()}
@@ -313,31 +342,42 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
         for _, b in gw_bets.iterrows():
             user = b['user']
             if user not in base_stats: continue
-            outcome = determine_bet_outcome(b, b)
+            
+            db_res = str(b.get('result', '')).strip().upper()
+            db_net = float(b['net']) if pd.notna(b['net']) and b['net'] != '' else 0
+            
             stake = float(b['stake'])
             odds = float(b['odds'])
             pot_win = (stake * odds) - stake
             dream_profit[user] += int(pot_win)
+            
             pnl = 0
             is_inplay = False
-            if outcome == 'WIN': pnl = pot_win
-            elif outcome == 'LOSE': pnl = -stake
+            
+            # Logic: If Settled in DB, use DB Net. If Open & In-Play, simulate.
+            if db_res in ['WIN', 'LOSE']:
+                pnl = db_net
             else:
+                # Open
                 status = str(b.get('status', 'SCHEDULED')).strip().upper()
                 if status not in ['SCHEDULED', 'TIMED', 'POSTPONED', 'FINISHED']:
+                    # In-Play Simulation
                     h_sc = int(b['home_score']) if pd.notna(b['home_score']) else 0
                     a_sc = int(b['away_score']) if pd.notna(b['away_score']) else 0
                     curr_outcome = "DRAW"
                     if h_sc > a_sc: curr_outcome = "HOME"
                     elif a_sc > h_sc: curr_outcome = "AWAY"
+                    
                     if b['pick'] == curr_outcome: pnl = pot_win
                     else: pnl = -stake
                     is_inplay = True
             
+            # Add to GW Diff
             gw_total_pnl[user] += int(pnl)
             if current_bm and current_bm in gw_total_pnl and current_bm != user:
                 gw_total_pnl[current_bm] -= int(pnl)
             
+            # Add In-Play Sim to Total (Settled is already in Base Stats)
             if is_inplay:
                 inplay_sim_only[user] += int(pnl)
                 if current_bm and current_bm in inplay_sim_only and current_bm != user:
@@ -419,23 +459,22 @@ def sync_api(api_token):
 def main():
     if not supabase: st.error("DB Error"); st.stop()
     
-    # --- 1. SYNC & SETTLE ARCHITECTURE (SSOT 5.1) ---
+    # --- 1. SYNC & SETTLE ARCHITECTURE (SSOT 5.2) ---
     res_conf = supabase.table("config").select("*").execute()
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
-    # Force Sync & Settle on Load
-    if 'v51_synced' not in st.session_state:
-        with st.spinner("Syncing & Settling Bets..."): 
+    # Automatic Persistence Trigger
+    if 'v52_synced' not in st.session_state:
+        with st.spinner("Syncing matches & Settling payouts..."): 
             sync_api(token)          # 1. Update Matches
-            settle_bets_persistent() # 2. Write Results to DB
-        st.session_state['v51_synced'] = True
+            settle_bets_persistent() # 2. WRITE WIN/LOSE, PAYOUT, NET TO DB
+        st.session_state['v52_synced'] = True
 
-    # --- 2. FETCH LATEST DATA (Cleaned & Settled) ---
+    # --- 2. FETCH LATEST DATA (Now contains settled results) ---
     bets, odds, results, bm_log, users, config = fetch_all_data()
     if users.empty: st.warning("User data missing."); st.stop()
 
-    # Login
     if 'user' not in st.session_state or not st.session_state['user']:
         st.markdown("<h2 style='text-align:center; opacity:0.8; letter-spacing:2px'>LOGIN</h2>", unsafe_allow_html=True)
         c1, c2, c3 = st.columns([1,2,1])
@@ -455,14 +494,12 @@ def main():
     me = st.session_state['user']
     role = st.session_state.get('role', 'user')
 
-    # 3. Setup Context
     target_gw = get_strict_target_gw(results)
     check_and_assign_bm(target_gw, bm_log, users)
     
     bm_log_refresh = supabase.table("bm_log").select("*").execute()
     bm_log = pd.DataFrame(bm_log_refresh.data) if bm_log_refresh.data else bm_log
 
-    # 4. Global Stats Calculation
     stats, bm_map = calculate_stats(bets, results, bm_log, users)
     
     nums = "".join([c for c in target_gw if c.isdigit()])
@@ -538,13 +575,15 @@ def main():
                             me_cls = "me" if b['user'] == me else ""
                             pick_txt = b['pick'][:4]
                             pnl_span = ""
-                            outcome = determine_bet_outcome(b, m)
-                            if outcome == 'WIN':
-                                b_win = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
-                                pnl_span = f"<span class='bb-res-win'>+¥{int(b_win):,}</span>"
-                            elif outcome == 'LOSE':
-                                b_pnl = -float(b['stake'])
-                                pnl_span = f"<span class='bb-res-lose'>-¥{int(abs(b_pnl)):,}</span>"
+                            # Use DB Result if available
+                            db_res = str(b.get('result', '')).strip().upper()
+                            db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) and b.get('net') != '' else 0
+                            
+                            if db_res == 'WIN':
+                                pnl_span = f"<span class='bb-res-win'>+¥{int(db_net):,}</span>"
+                            elif db_res == 'LOSE':
+                                pnl_span = f"<span class='bb-res-lose'>-¥{int(abs(db_net)):,}</span>"
+                            
                             badges += f"""<div class="bet-badge {me_cls}"><span>{b['user']}:</span><span class="bb-pick">{pick_txt}</span> (¥{int(b['stake']):,}){pnl_span}</div>"""
                         card_html += f"""<div class="social-bets-container">{badges}</div>"""
                     card_html += "</div>"
@@ -564,10 +603,8 @@ def main():
                             cur_s = int(my_bet.iloc[0]['stake']) if not my_bet.empty else 1000
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
-                            
                             new_total = current_spend - (int(my_bet.iloc[0]['stake']) if not my_bet.empty else 0) + stake
                             over_budget = new_total > budget_limit
-                            
                             if c_b.form_submit_button("BET", use_container_width=True):
                                 if over_budget: st.error(f"Over Budget! Limit: ¥{budget_limit:,}")
                                 else:
@@ -581,7 +618,7 @@ def main():
     # --- TAB 2: LIVE ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
-        if st.button("🔄 REFRESH", use_container_width=True): 
+        if st.button("🔄 REFRESH & SETTLE", use_container_width=True): 
             sync_api(token)
             settle_bets_persistent()
             st.rerun()
@@ -625,25 +662,25 @@ def main():
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
             
-            # Use Result Column primarily
             hist = pd.merge(hist, results[['match_id', 'home', 'away']], on='match_id', how='left')
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
             
             for _, b in hist.iterrows():
-                # DB Result is the truth now
+                # DISPLAY FROM DB
                 outcome = str(b.get('result', '')).strip().upper()
                 if outcome not in ['WIN', 'LOSE']: outcome = 'PENDING'
+                
+                net_val = float(b.get('net', 0)) if pd.notna(b.get('net')) and b.get('net') != '' else 0
                 
                 cls = "h-win" if outcome == 'WIN' else ("h-lose" if outcome == 'LOSE' else "")
                 pnl = "PENDING"
                 col = "#aaa"
                 if outcome == 'WIN':
-                    val = (b['stake']*b['odds'])-b['stake']
-                    pnl = f"+¥{int(val):,}"
+                    pnl = f"+¥{int(net_val):,}"
                     col = "#4ade80"
                 elif outcome == 'LOSE':
-                    pnl = f"-¥{int(b['stake']):,}"
+                    pnl = f"-¥{int(abs(net_val)):,}"
                     col = "#f87171"
                 
                 match_name = f"{b['home']} vs {b['away']}" if pd.notna(b['home']) else b.get('match', 'Unknown')
@@ -662,7 +699,7 @@ def main():
         
         st.markdown("---")
         st.markdown("#### 💰 PROFITABLE CLUBS")
-        prof_data = calculate_profitable_clubs(bets, results)
+        prof_data = calculate_profitable_clubs_fixed(bets, results)
         if prof_data:
             c_cols = st.columns(len(prof_data))
             for i, (u, clubs) in enumerate(prof_data.items()):
@@ -684,15 +721,19 @@ def main():
     with t5:
         if role == 'admin':
             st.markdown("#### SYSTEM HEALTH")
-            # Unsettled Check
-            unsettled_q = len(bets[(bets['result'] == '') & (bets['match_id'].isin(results[results['status']=='FINISHED']['match_id']))])
+            # Check bets that are Open but match is Finished
+            unsettled_q = 0
+            if not bets.empty and not results.empty:
+                merged = pd.merge(bets, results, on='match_id', how='inner')
+                unsettled_q = len(merged[(merged['result'] == '') & (merged['status'] == 'FINISHED')])
+            
             c1, c2 = st.columns(2)
             c1.metric("Total Bets", len(bets))
             c2.metric("Unsettled Finished", unsettled_q)
             
-            if st.button("🚨 FORCE SETTLE (WRITE DB)", type="primary"):
+            if st.button("🚨 FORCE SETTLE (CALC & WRITE)", type="primary"):
                 count = settle_bets_persistent()
-                st.success(f"Settled {count} bets!"); time.sleep(1); st.rerun()
+                st.success(f"Settled {count} bets! Reloading..."); time.sleep(1); st.rerun()
 
             st.markdown("#### ODDS EDITOR")
             with st.expander("📝 Update Odds", expanded=True):
