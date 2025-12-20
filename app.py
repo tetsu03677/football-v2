@@ -163,7 +163,7 @@ def get_supabase():
 supabase = get_supabase()
 
 def fetch_all_data():
-    [cite_start]"""Fetch all tables safely and ENFORCE TYPES STRONGLY [cite: 3][cite_start][cite: 10]"""
+    """Fetch all tables safely and ENFORCE TYPES STRONGLY"""
     try:
         def get_df_safe(table, expected_cols):
             try:
@@ -182,7 +182,7 @@ def fetch_all_data():
         users = get_df_safe("users", ['username','password','role','team'])
         config = get_df_safe("config", ['key','value'])
         
-        # --- CRITICAL FIX: STRONGEST TYPE CONVERSION ---
+        # --- CRITICAL FIX V4.7: STRONGEST TYPE CONVERSION ---
         # Convert to string first (to handle floats like 12345.0), then to int
         if not bets.empty:
             bets = bets.dropna(subset=['match_id'])
@@ -263,7 +263,7 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
 
 def determine_bet_outcome(bet_row, match_row):
     """
-    [cite_start]Core Logic: Determine WIN/LOSE based on DB result OR Dynamic Match Status[cite: 11].
+    Core Logic: Determine WIN/LOSE based on DB result OR Dynamic Match Status.
     Returns: 'WIN', 'LOSE', 'OPEN'
     """
     # 1. Trust DB Result if present
@@ -354,7 +354,7 @@ def calculate_profitable_clubs(bets_df, results_df):
 
 def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, target_gw):
     """
-    [cite_start]Complex Live Logic[cite: 12]:
+    Complex Live Logic:
     Total = All Time (Settled + Dynamic) + In-Play Sim
     Diff = GW Only (Settled + Dynamic + In-Play Sim)
     """
@@ -440,7 +440,7 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
     return pd.DataFrame(live_data).sort_values('Total', ascending=False)
 
 def get_strict_target_gw(results_df):
-    [cite_start]"""Strict Future Mode [cite: 12]"""
+    """Strict Future Mode"""
     if results_df.empty: return "GW1"
     now_jst = datetime.datetime.now(JST)
     if 'dt_jst' not in results_df.columns: results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
@@ -509,22 +509,16 @@ def sync_api(api_token):
 def main():
     if not supabase: st.error("DB Error"); st.stop()
     
-    # [cite_start]--- 1. SYNC-FIRST ARCHITECTURE (Correct Order) --- [cite: 9]
-    # First: Check Token (Small fetch or use session)
-    # But for simplicity, we fetch config first to get token
+    # --- 1. SYNC-FIRST ARCHITECTURE (Correct Order) ---
     res_conf = supabase.table("config").select("*").execute()
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
-    # Force Sync on Start (Only once per session run if desired, or always)
-    # To fix "PENDING" issue, we MUST sync before loading bets/results
     if 'v47_synced' not in st.session_state:
         with st.spinner("Syncing..."): sync_api(token)
         st.session_state['v47_synced'] = True
-        # Do not rerun here, just proceed to fetch latest data
 
     # --- 2. FETCH LATEST DATA ---
-    # Now that DB is synced, fetch everything
     bets, odds, results, bm_log, users, config = fetch_all_data()
     if users.empty: st.warning("User data missing."); st.stop()
 
@@ -715,7 +709,7 @@ def main():
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
             
-            # [cite_start]Join for names and dynamic settlement [cite: 15]
+            # Join for names and dynamic settlement
             hist = pd.merge(hist, results[['match_id', 'home', 'away', 'status', 'home_score', 'away_score']], on='match_id', how='left')
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
