@@ -12,7 +12,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V5.9.2", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V5.9.3", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -469,10 +469,10 @@ def main():
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
-    if 'v592_api_synced' not in st.session_state:
+    if 'v593_api_synced' not in st.session_state:
         with st.spinner("Syncing API & Auto-Settling (Date-Aware)..."): 
             sync_api(token)
-            st.session_state['v592_api_synced'] = True
+            st.session_state['v593_api_synced'] = True
     
     count, scope_desc = settle_bets_date_aware()
     if count > 0:
@@ -661,18 +661,46 @@ def main():
     with t3:
         if not bets.empty:
             c1, c2 = st.columns(2)
-            sel_u = c1.selectbox("User", ["All"] + list(users['username'].unique()))
-            sel_g = c2.selectbox("GW", ["All"] + sorted(list(bets['gw'].unique()), key=lambda x: int("".join([c for c in str(x) if c.isdigit()] or 0)), reverse=True))
+            
+            # --- V5.9.3: Default & Constraints ---
+            all_gws = sorted(list(bets['gw'].unique()), key=lambda x: int("".join([c for c in str(x) if c.isdigit()] or 0)), reverse=True)
+            
+            # Default indices
+            def_u_idx = 0 # 'All' is first
+            def_g_idx = 0 
+            if target_gw in all_gws:
+                def_g_idx = all_gws.index(target_gw)
+            
+            # User Selector
+            sel_u = c1.selectbox("User", ["All"] + list(users['username'].unique()), index=def_u_idx)
+            
+            # GW Selector Logic (Constraint)
+            if sel_u == "All":
+                # Remove "All" option if User is "All"
+                gw_opts = all_gws
+            else:
+                gw_opts = ["All"] + all_gws
+                # Adjust default index because "All" was added at 0
+                if target_gw in all_gws:
+                    def_g_idx = all_gws.index(target_gw) + 1
+            
+            # Safe index handling
+            if def_g_idx >= len(gw_opts): def_g_idx = 0
+            
+            sel_g = c2.selectbox("GW", gw_opts, index=def_g_idx)
+            
+            # Filtering
             hist = bets.copy()
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
             
-            results_safe = results.rename(columns={'status': 'match_status'})
-            hist = pd.merge(hist, results_safe[['match_id', 'home', 'away', 'match_status']], on='match_id', how='left')
+            # Safe Merge (Deduplicated Result)
+            results_dedup = results.drop_duplicates(subset=['match_id']).rename(columns={'status': 'match_status'})
+            hist = pd.merge(hist, results_dedup[['match_id', 'home', 'away', 'match_status']], on='match_id', how='left')
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
             
-            # --- V5.9.2 Vertical List Summary ---
+            # Summary
             if not hist.empty:
                 total_net = hist['net'].sum()
                 
