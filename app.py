@@ -12,7 +12,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V5.3.1", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V5.4", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -100,7 +100,6 @@ def fetch_all_data():
         if not bets.empty:
             bets['pick'] = bets['pick'].astype(str).str.strip().str.upper()
             bets['gw'] = bets['gw'].astype(str).str.strip().str.upper()
-            # Clean Result/Net
             bets['result'] = bets['result'].astype(str).str.strip().str.upper().replace({'NONE': '', 'NAN': ''})
             bets['net'] = pd.to_numeric(bets['net'], errors='coerce').fillna(0)
         
@@ -130,7 +129,7 @@ def get_config_value(config_df, key, default):
     return default
 
 # ==============================================================================
-# 2. Business Logic (Force Settlement)
+# 2. Business Logic (Scoped Settlement)
 # ==============================================================================
 
 def to_jst(iso_str):
@@ -157,7 +156,7 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     html_parts = ['<div class="form-container"><span class="form-arrow">OLD</span>']
     for _, g in past.iterrows():
         is_home = (g['home'] == team_name)
-        ha_label = "H" if is_home else "A" # --- FIXED: Defined ha_label here ---
+        ha_label = "H" if is_home else "A"
         h = int(g['home_score']) if pd.notna(g['home_score']) else 0
         a = int(g['away_score']) if pd.notna(g['away_score']) else 0
         icon = '<span style="color:#f87171">●</span>' 
@@ -167,16 +166,25 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     html_parts.append('<span class="form-arrow">NEW</span></div>')
     return "".join(html_parts)
 
-def settle_bets_force():
+def extract_gw_num(gw_str):
+    try:
+        return int(re.sub(r'\D', '', str(gw_str)))
+    except:
+        return 0
+
+def settle_bets_scoped():
     """
-    FORCE UPDATE: Updates 'result', 'payout', 'net' for ALL finished matches where net is NULL/0.
+    SCOPED FORCE UPDATE: 
+    Updates 'result', 'payout', 'net' for finished matches 
+    ONLY within the range of [Current GW - 5] to [Current GW + 1].
+    Safe to run repeatedly.
     """
     try:
         # 1. Fetch RAW data
         b_res = supabase.table("bets").select("*").execute()
         r_res = supabase.table("result").select("*").execute()
         
-        if not b_res.data or not r_res.data: return 0
+        if not b_res.data or not r_res.data: return 0, "No data"
         
         df_b = pd.DataFrame(b_res.data)
         df_r = pd.DataFrame(r_res.data)
@@ -185,19 +193,33 @@ def settle_bets_force():
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         
-        # Merge
-        merged = pd.merge(df_b, df_r[['match_id', 'status', 'home_score', 'away_score']], on='match_id', how='inner')
+        # Determine Current GW based on latest matches
+        # Parse GW numbers
+        df_r['gw_num'] = df_r['gw'].apply(extract_gw_num)
+        
+        # Find max GW in results (assuming season is progressing)
+        # Or better: Find GW of matches happening today/recently
+        # For simplicity & robustness: Max GW in DB is usually the current or next one.
+        # Let's take the max GW present in results as "Current" reference point.
+        max_gw = df_r['gw_num'].max()
+        if pd.isna(max_gw) or max_gw == 0: max_gw = 38 # Fallback
+        
+        target_gws = range(max_gw - 5, max_gw + 2) # Scope: Past 5 to Next 1
+        
+        # Filter Data by Scope
+        df_r_scoped = df_r[df_r['gw_num'].isin(target_gws)]
+        
+        # Merge Only Scoped Results
+        merged = pd.merge(df_b, df_r_scoped[['match_id', 'status', 'home_score', 'away_score', 'gw_num']], on='match_id', how='inner')
         
         updates_count = 0
         
         for _, row in merged.iterrows():
             match_status = str(row.get('status', '')).strip().upper()
             
-            # Check if Net is None, NaN, or if Result is empty but match is finished
-            net_val = row.get('net')
-            is_net_missing = pd.isna(net_val) or str(net_val).strip() == ''
-            
-            if match_status == 'FINISHED' and is_net_missing:
+            # FORCE UPDATE for ANY Finished match in this scope
+            # We don't check if net is empty. We OVERWRITE to ensure correctness.
+            if match_status == 'FINISHED':
                 h_s = int(row['home_score'])
                 a_s = int(row['away_score'])
                 
@@ -220,7 +242,7 @@ def settle_bets_force():
                     payout = 0
                     net = int(-stake)
                 
-                # FORCE WRITE
+                # Update DB
                 supabase.table("bets").update({
                     "result": final_res,
                     "payout": payout,
@@ -229,10 +251,10 @@ def settle_bets_force():
                 
                 updates_count += 1
                 
-        return updates_count
+        return updates_count, f"GW {min(target_gws)} to {max(target_gws)}"
     except Exception as e:
         print(f"Settlement Error: {e}")
-        return 0
+        return 0, str(e)
 
 def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
     """
@@ -421,9 +443,6 @@ def sync_api(api_token):
     except: return False
 
 def determine_bet_outcome(bet_row, match_row):
-    """
-    Pure Logic: Returns 'WIN', 'LOSE', or 'OPEN' based on data provided.
-    """
     # 1. Check DB first (Fast Path)
     db_res = str(bet_row.get('result', '')).strip().upper()
     if db_res in ['WIN', 'LOSE']: return db_res
@@ -451,14 +470,16 @@ def main():
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
-    # Force Settlement ON EVERY LOAD
-    if 'v531_api_synced' not in st.session_state:
-        with st.spinner("Syncing API..."): sync_api(token)
-        st.session_state['v531_api_synced'] = True
+    # Scoped Force Settlement ON EVERY LOAD
+    if 'v54_api_synced' not in st.session_state:
+        with st.spinner("Syncing API & Scoped Settlement..."): 
+            sync_api(token)
+            st.session_state['v54_api_synced'] = True
     
-    count = settle_bets_force()
+    # Force DB write-back for Scoped GWs
+    count, scope_desc = settle_bets_scoped()
     if count > 0:
-        st.toast(f"✅ Auto-Settled {count} bets!", icon="💰")
+        st.toast(f"✅ Settled {count} bets ({scope_desc})", icon="💰")
 
     # --- 2. FETCH LATEST DATA ---
     bets, odds, results, bm_log, users, config = fetch_all_data()
@@ -590,10 +611,8 @@ def main():
                             cur_s = int(my_bet.iloc[0]['stake']) if not my_bet.empty else 1000
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
-                            
                             new_total = current_spend - (int(my_bet.iloc[0]['stake']) if not my_bet.empty else 0) + stake
                             over_budget = new_total > budget_limit
-                            
                             if c_b.form_submit_button("BET", use_container_width=True):
                                 if over_budget: st.error(f"Over Budget! Limit: ¥{budget_limit:,}")
                                 else:
@@ -607,9 +626,9 @@ def main():
     # --- TAB 2: LIVE ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
-        if st.button("🔄 REFRESH & FORCE SETTLE", use_container_width=True): 
+        if st.button("🔄 REFRESH & SETTLE", use_container_width=True): 
             sync_api(token)
-            settle_bets_force()
+            settle_bets_scoped()
             st.rerun()
         
         live_df = calculate_live_leaderboard_data(bets, results, bm_map, users, target_gw)
@@ -713,16 +732,15 @@ def main():
             unsettled_q = 0
             if not bets.empty and not results.empty:
                 merged = pd.merge(bets, results, on='match_id', how='inner')
-                # Count if net is NULL/0 but match is FINISHED
                 unsettled_q = len(merged[(pd.isna(merged['net']) | (merged['net'] == 0)) & (merged['status'] == 'FINISHED')])
             
             c1, c2 = st.columns(2)
             c1.metric("Total Bets", len(bets))
             c2.metric("Unsettled Finished", unsettled_q)
             
-            if st.button("🚨 FORCE SETTLE (WRITE DB)", type="primary"):
-                count = settle_bets_force()
-                st.success(f"Settled {count} bets! Reloading..."); time.sleep(1); st.rerun()
+            if st.button("🚨 FORCE SCOPED SETTLE", type="primary"):
+                count, scope_desc = settle_bets_scoped()
+                st.success(f"Settled {count} bets ({scope_desc})! Reloading..."); time.sleep(1); st.rerun()
 
             st.markdown("#### ODDS EDITOR")
             with st.expander("📝 Update Odds", expanded=True):
