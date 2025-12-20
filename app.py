@@ -5,19 +5,20 @@ import datetime
 import time
 import pytz
 import random
+import re
 from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
 # 0. System Configuration & CSS (Native Dark Mode via config.toml)
 # ==============================================================================
-st.set_page_config(page_title="Football App V4.7", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V4.8", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 # Clean CSS: Focus on Layout & Glassmorphism.
 st.markdown("""
 <style>
-    /* --- Layout Fix: Mobile Header Safety --- */
+    /* --- Layout Fix: Mobile Header Safety (SSOT 4.3) --- */
     .block-container {
         padding-top: 4.5rem;
         padding-bottom: 6rem;
@@ -26,7 +27,7 @@ st.markdown("""
         padding-right: 0.5rem;
     }
 
-    /* --- Vertical Card Integration (Glassmorphism) --- */
+    /* --- Vertical Card Integration --- */
     .app-card-top {
         border: 1px solid rgba(255,255,255,0.1);
         border-bottom: none;
@@ -45,7 +46,7 @@ st.markdown("""
         margin-bottom: 24px;
     }
 
-    /* --- Responsive Match Card (Flexbox) --- */
+    /* --- Responsive Match Card --- */
     .card-header {
         display: flex; justify-content: space-between;
         font-family: 'Courier New', monospace; font-size: 0.75rem; opacity: 0.7;
@@ -54,17 +55,13 @@ st.markdown("""
     }
     
     .matchup-flex {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        text-align: center;
-        gap: 8px;
-        margin-bottom: 16px;
+        display: flex; align-items: center; justify-content: space-between;
+        text-align: center; gap: 8px; margin-bottom: 16px;
     }
     
     .team-col {
-        flex: 1; width: 0;
-        display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+        flex: 1; width: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: flex-start;
     }
     
     .team-name { 
@@ -163,7 +160,9 @@ def get_supabase():
 supabase = get_supabase()
 
 def fetch_all_data():
-    """Fetch all tables safely and ENFORCE TYPES STRONGLY"""
+    """
+    Fetch all tables safely and ENFORCE TYPES & SANITIZATION (SSOT 4.1).
+    """
     try:
         def get_df_safe(table, expected_cols):
             try:
@@ -182,17 +181,22 @@ def fetch_all_data():
         users = get_df_safe("users", ['username','password','role','team'])
         config = get_df_safe("config", ['key','value'])
         
-        # --- CRITICAL FIX V4.7: STRONGEST TYPE CONVERSION ---
-        # Convert to string first (to handle floats like 12345.0), then to int
+        # --- 1. Robust Type Enforcement (match_id) ---
+        # Convert to string -> remove '.0' -> convert to int. This handles floats, ints, and strings.
+        for df in [bets, results, odds]:
+            if not df.empty and 'match_id' in df.columns:
+                df.dropna(subset=['match_id'], inplace=True)
+                df['match_id'] = df['match_id'].astype(str).str.replace(r'\.0$', '', regex=True).astype(int)
+
+        # --- 2. String Sanitization (SSOT 4.1) ---
+        # Remove whitespace and force uppercase to ensure matching
         if not bets.empty:
-            bets = bets.dropna(subset=['match_id'])
-            bets['match_id'] = bets['match_id'].astype(str).str.replace(r'\.0$', '', regex=True).astype(int)
+            bets['pick'] = bets['pick'].astype(str).str.strip().str.upper()
+            bets['gw'] = bets['gw'].astype(str).str.strip().str.upper()
+        
         if not results.empty:
-            results = results.dropna(subset=['match_id'])
-            results['match_id'] = results['match_id'].astype(str).str.replace(r'\.0$', '', regex=True).astype(int)
-        if not odds.empty:
-            odds = odds.dropna(subset=['match_id'])
-            odds['match_id'] = odds['match_id'].astype(str).str.replace(r'\.0$', '', regex=True).astype(int)
+            results['status'] = results['status'].astype(str).str.strip().str.upper()
+            results['gw'] = results['gw'].astype(str).str.strip().str.upper()
             
         return bets, odds, results, bm_log, users, config
     except Exception as e:
@@ -267,12 +271,12 @@ def determine_bet_outcome(bet_row, match_row):
     Returns: 'WIN', 'LOSE', 'OPEN'
     """
     # 1. Trust DB Result if present
-    db_res = str(bet_row.get('result', '')).upper()
+    db_res = str(bet_row.get('result', '')).strip().upper()
     if db_res in ['WIN', 'LOSE']:
         return db_res
     
     # 2. Dynamic Check: If match is FINISHED, calculate result
-    status = match_row.get('status', 'SCHEDULED')
+    status = str(match_row.get('status', 'SCHEDULED')).strip().upper()
     if status == 'FINISHED':
         h_s = int(match_row['home_score']) if pd.notna(match_row['home_score']) else 0
         a_s = int(match_row['away_score']) if pd.notna(match_row['away_score']) else 0
@@ -281,7 +285,9 @@ def determine_bet_outcome(bet_row, match_row):
         if h_s > a_s: outcome = "HOME"
         elif a_s > h_s: outcome = "AWAY"
         
-        return 'WIN' if bet_row['pick'] == outcome else 'LOSE'
+        # Safe Pick Comparison
+        user_pick = str(bet_row['pick']).strip().upper()
+        return 'WIN' if user_pick == outcome else 'LOSE'
         
     return 'OPEN'
 
@@ -354,23 +360,16 @@ def calculate_profitable_clubs(bets_df, results_df):
 
 def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, target_gw):
     """
-    Complex Live Logic:
-    Total = All Time (Settled + Dynamic) + In-Play Sim
-    Diff = GW Only (Settled + Dynamic + In-Play Sim)
+    Live P&L Logic: Total (Lifetime+Diff) vs Diff (GW specific)
     """
-    # 1. Base Stats (Lifetime P&L - Includes Settled & Dynamic)
     base_stats, _ = calculate_stats(bets_df, results_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
     
-    # Init trackers for GW specific diff
-    gw_total_pnl = {u: 0 for u in users_df['username'].unique()} # Realized + InPlay for this GW
+    gw_total_pnl = {u: 0 for u in users_df['username'].unique()} 
     dream_profit = {u: 0 for u in users_df['username'].unique()}
-    
-    # 2. Process Bets for Target GW Only
-    gw_bets = bets_df[bets_df['gw'] == target_gw].copy() if not bets_df.empty else pd.DataFrame()
-    
-    # Tracker for In-Play Sim to add to Base Stats
     inplay_sim_only = {u: 0 for u in users_df['username'].unique()}
 
+    gw_bets = bets_df[bets_df['gw'] == target_gw].copy() if not bets_df.empty else pd.DataFrame()
+    
     if not gw_bets.empty:
         gw_bets = pd.merge(gw_bets, results_df[['match_id', 'status', 'home_score', 'away_score']], on='match_id', how='left')
         current_bm = bm_map.get(target_gw)
@@ -384,10 +383,8 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
             odds = float(b['odds'])
             pot_win = (stake * odds) - stake
             
-            # Theoretical Max (Dream)
             dream_profit[user] += int(pot_win)
             
-            # Calculate GW P&L (Realized + Unrealized)
             pnl = 0
             is_inplay = False
             
@@ -396,10 +393,8 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
             elif outcome == 'LOSE':
                 pnl = -stake
             else:
-                # Open - Check In-Play
                 status = b.get('status', 'SCHEDULED')
                 if status not in ['SCHEDULED', 'TIMED', 'POSTPONED', 'FINISHED']:
-                    # IN PLAY Logic
                     h_sc = int(b['home_score']) if pd.notna(b['home_score']) else 0
                     a_sc = int(b['away_score']) if pd.notna(b['away_score']) else 0
                     curr_outcome = "DRAW"
@@ -410,24 +405,18 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
                     else: pnl = -stake
                     is_inplay = True
             
-            # Add to GW Diff Tracker
             gw_total_pnl[user] += int(pnl)
             if current_bm and current_bm in gw_total_pnl and current_bm != user:
                 gw_total_pnl[current_bm] -= int(pnl)
             
-            # Add to Base Stats ONLY if In-Play (because Base Stats already includes Settled/Dynamic)
             if is_inplay:
                 inplay_sim_only[user] += int(pnl)
                 if current_bm and current_bm in inplay_sim_only and current_bm != user:
                     inplay_sim_only[current_bm] -= int(pnl)
 
-    # 3. Construct Final Data
     live_data = []
     for u, s in base_stats.items():
-        # Total = Lifetime Base (Settled) + InPlay Sim
         total_val = s['balance'] + inplay_sim_only.get(u, 0)
-        
-        # Diff = All P&L generated in this GW
         diff_val = gw_total_pnl.get(u, 0)
         
         live_data.append({
@@ -509,16 +498,17 @@ def sync_api(api_token):
 def main():
     if not supabase: st.error("DB Error"); st.stop()
     
-    # --- 1. SYNC-FIRST ARCHITECTURE (Correct Order) ---
+    # --- 1. SYNC-FIRST ARCHITECTURE (SSOT 4.1) ---
     res_conf = supabase.table("config").select("*").execute()
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
-    if 'v47_synced' not in st.session_state:
+    # Always sync on start
+    if 'v48_synced' not in st.session_state:
         with st.spinner("Syncing..."): sync_api(token)
-        st.session_state['v47_synced'] = True
+        st.session_state['v48_synced'] = True
 
-    # --- 2. FETCH LATEST DATA ---
+    # --- 2. FETCH LATEST DATA (With Sanitization) ---
     bets, odds, results, bm_log, users, config = fetch_all_data()
     if users.empty: st.warning("User data missing."); st.stop()
 
@@ -549,7 +539,7 @@ def main():
     bm_log_refresh = supabase.table("bm_log").select("*").execute()
     bm_log = pd.DataFrame(bm_log_refresh.data) if bm_log_refresh.data else bm_log
 
-    # 4. Global Stats Calculation
+    # 4. Global Stats Calculation (Dynamic)
     stats, bm_map = calculate_stats(bets, results, bm_log, users)
     
     nums = "".join([c for c in target_gw if c.isdigit()])
@@ -764,6 +754,21 @@ def main():
     # --- TAB 5: ADMIN ---
     with t5:
         if role == 'admin':
+            st.markdown("#### SYSTEM HEALTH")
+            b_count = len(bets)
+            r_count = len(results)
+            # Debug Stats
+            merged_debug = pd.merge(bets, results, on='match_id', how='inner')
+            m_count = len(merged_debug)
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Bets", b_count)
+            c2.metric("Merged Bets", m_count)
+            c3.metric("Pending (Merged)", len(merged_debug[merged_debug['status'] != 'FINISHED']))
+            
+            if m_count < b_count:
+                st.error(f"CRITICAL: {b_count - m_count} bets failed to merge with results! Check Match IDs.")
+                
             st.markdown("#### ODDS EDITOR")
             with st.expander("📝 Update Odds", expanded=True):
                 if not results.empty:
