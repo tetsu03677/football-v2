@@ -11,15 +11,15 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS (Native Dark Mode via config.toml)
 # ==============================================================================
-st.set_page_config(page_title="Football App V4.3", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V4.4", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
-# Clean CSS: Focus only on Layout & Glassmorphism.
+# [cite_start]Clean CSS: Focus only on Layout & Glassmorphism[cite: 10].
 st.markdown("""
 <style>
-    /* --- Layout Fix: Increased top padding for mobile header safety --- */
+    [cite_start]/* --- Layout Fix: Increased top padding for mobile header safety [cite: 10] --- */
     .block-container {
-        padding-top: 4.5rem; /* Sufficient space for Syncing/Running status */
+        padding-top: 4.5rem;
         padding-bottom: 6rem;
         max-width: 100%;
         padding-left: 0.5rem;
@@ -119,6 +119,8 @@ st.markdown("""
     }
     .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); color: #fff; }
     .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
+    .bb-res-win { color: #4ade80; font-weight: bold; margin-left: 4px; }
+    .bb-res-lose { color: #f87171; font-weight: bold; margin-left: 4px; }
 
     /* --- Dashboard & Status --- */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
@@ -186,12 +188,12 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at'])
-        odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
-        results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score'])
-        bm_log = get_df_safe("bm_log", ['gw','bookmaker'])
-        users = get_df_safe("users", ['username','password','role','team'])
-        config = get_df_safe("config", ['key','value'])
+        [cite_start]bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at']) # [cite: 5]
+        [cite_start]odds = get_df_safe("odds", ['match_id','home_win','draw','away_win']) # [cite: 6]
+        [cite_start]results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score']) # [cite: 6]
+        [cite_start]bm_log = get_df_safe("bm_log", ['gw','bookmaker']) # [cite: 7]
+        [cite_start]users = get_df_safe("users", ['username','password','role','team']) # [cite: 7]
+        [cite_start]config = get_df_safe("config", ['key','value']) # [cite: 8]
         return bets, odds, results, bm_log, users, config
     except Exception as e:
         st.error(f"System Error: {e}")
@@ -226,7 +228,7 @@ def to_jst(iso_str):
     except: return None
 
 def get_recent_form_html(team_name, results_df, current_kickoff_jst):
-    """Generate Form Guide HTML (Old -> New)"""
+    [cite_start]"""Generate Form Guide HTML (Old -> New) [cite: 11]"""
     if results_df.empty: return "-"
     if 'dt_jst' not in results_df.columns:
         results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
@@ -322,16 +324,14 @@ def calculate_profitable_clubs(bets_df, results_df):
 
 def calculate_live_pnl_and_dream(bets_df, results_df, bm_map, users_df, target_gw):
     """
-    Live P&L + Dream Logic (Theoretical Max Profit for GW).
-    Fix: Use bets_df argument instead of global 'bets'
+    [cite_start]Live P&L + Dream Logic (Theoretical Max Profit for GW). [cite: 9]
+    Includes real-time P&L for ongoing matches.
     """
     base_stats, _ = calculate_stats(bets_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
     live_data = []
 
-    # Filter bets for target GW
     gw_bets = bets_df[bets_df['gw'] == target_gw].copy() if not bets_df.empty else pd.DataFrame()
     
-    # Init Simulation Data
     sim_pnl = {u: 0 for u in users_df['username'].unique()}
     dream_profit = {u: 0 for u in users_df['username'].unique()}
     current_bm = bm_map.get(target_gw)
@@ -343,16 +343,45 @@ def calculate_live_pnl_and_dream(bets_df, results_df, bm_map, users_df, target_g
             if m_row.empty: continue
             m = m_row.iloc[0]
             
-            # --- 1. Dream Logic (Theoretical Max Profit for GW) ---
-            # Calculate potential profit if this bet wins (regardless of actual status)
+            # --- Dream Logic ---
             pot_win = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
             dream_profit[b['user']] += int(pot_win)
             
-            # --- 2. Live P&L Simulation ---
-            # Only if status is OPEN in DB (not settled)
-            if b.get('result', '') == '':
+            # --- Live P&L Simulation ---
+            # Calculate for ALL matches in this GW if they have a score (FINISHED or IN_PLAY)
+            # Even if result is already set in DB, re-calculate to be sure, or trust DB if settled.
+            # Strategy: If result is 'WIN'/'LOSE' in DB, take that. If not, use current score.
+            
+            res = b.get('result', '')
+            final_pnl = 0
+            
+            if res == 'WIN':
+                final_pnl = pot_win
+            elif res == 'LOSE':
+                final_pnl = -float(b['stake'])
+            else:
+                # Open bet: Check current status
                 if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
-                    # Simulate match result
+                    h_sc = int(m['home_score']) if pd.notna(m['home_score']) else 0
+                    a_sc = int(m['away_score']) if pd.notna(m['away_score']) else 0
+                    outcome = "DRAW"
+                    if h_sc > a_sc: outcome = "HOME"
+                    elif a_sc > h_sc: outcome = "AWAY"
+                    
+                    if b['pick'] == outcome: final_pnl = pot_win
+                    else: final_pnl = -float(b['stake'])
+            
+            # This is "GW specific P&L", so we add it to a tracking dict to show "Live Diff" or just update total
+            # But the requirement is "Live Leaderboard". Base stats has total.
+            # We want to add the *difference* between confirmed and live?
+            # Actually, base_stats includes settled bets. 
+            # If we want "Live" view, we should probably take base_stats (which has settled) 
+            # AND add the "Unsettled but currently winning/losing" bets.
+            # But if a bet is settled in DB, it is in base_stats.
+            # So we only simulate if res == '' (OPEN).
+            
+            if res == '':
+                 if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
                     h_sc = int(m['home_score']) if pd.notna(m['home_score']) else 0
                     a_sc = int(m['away_score']) if pd.notna(m['away_score']) else 0
                     outcome = "DRAW"
@@ -468,9 +497,9 @@ def main():
     role = st.session_state.get('role', 'user')
     token = get_api_token(config)
 
-    if 'v43_synced' not in st.session_state:
+    if 'v44_synced' not in st.session_state:
         with st.spinner("Syncing..."): sync_api(token)
-        st.session_state['v43_synced'] = True; st.rerun()
+        st.session_state['v44_synced'] = True; st.rerun()
 
     target_gw = get_strict_target_gw(results)
     check_and_assign_bm(target_gw, bm_log, users)
@@ -486,8 +515,8 @@ def main():
     lock_mins = get_config_value(config, "lock_minutes_before_earliest", 60)
     gw_locked = False
     
-    # Budget Logic (max_total_stake_per_gw)
-    budget_limit = get_config_value(config, "max_total_stake_per_gw", 20000)
+    # Budget Logic
+    [cite_start]budget_limit = get_config_value(config, "max_total_stake_per_gw", 20000) # [cite: 8]
     current_spend = 0
     if not bets.empty:
         my_gw_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw)]
@@ -512,7 +541,7 @@ def main():
         if is_bm: c_h2.markdown(f"<span class='bm-badge'>YOU ARE BM</span>", unsafe_allow_html=True)
         else: c_h2.markdown(f"<span class='bm-badge'>BM: {current_bm}</span>", unsafe_allow_html=True)
         
-        # Budget Tracker
+        # [cite_start]Budget Tracker [cite: 10]
         b_col = "#4ade80" if current_spend <= budget_limit else "#f87171"
         st.markdown(f"""
         <div class="budget-header">
@@ -554,12 +583,30 @@ def main():
 
                     # Card Top
                     card_html = f"""<div class="app-card-top"><div class="card-header"><span>⏱ {dt_str}</span><span>{m['status']}</span></div><div class="matchup-flex"><div class="team-col"><span class="team-name">{m['home']}</span>{form_h}</div><div class="score-col"><span class="score-box">{score_disp}</span></div><div class="team-col"><span class="team-name">{m['away']}</span>{form_a}</div></div><div class="info-row"><div class="odds-label">HOME <span class="odds-value">{oh if oh else '-'}</span></div><div class="odds-label">DRAW <span class="odds-value">{od if od else '-'}</span></div><div class="odds-label">AWAY <span class="odds-value">{oa if oa else '-'}</span></div></div>"""
+                    
                     if not match_bets.empty:
                         badges = ""
                         for _, b in match_bets.iterrows():
                             me_cls = "me" if b['user'] == me else ""
                             pick_txt = b['pick'][:4]
-                            badges += f"""<div class="bet-badge {me_cls}"><span>{b['user']}:</span><span class="bb-pick">{pick_txt}</span></div>"""
+                            
+                            # [cite_start]P&L Display for Finished Match [cite: 11]
+                            pnl_span = ""
+                            if m['status'] == 'FINISHED':
+                                b_win = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
+                                b_pnl = 0
+                                outcome = "DRAW"
+                                if h_s > a_s: outcome = "HOME"
+                                elif a_s > h_s: outcome = "AWAY"
+                                
+                                if b['pick'] == outcome:
+                                    b_pnl = b_win
+                                    pnl_span = f"<span class='bb-res-win'>+¥{int(b_pnl):,}</span>"
+                                else:
+                                    b_pnl = -float(b['stake'])
+                                    pnl_span = f"<span class='bb-res-lose'>-¥{int(abs(b_pnl)):,}</span>"
+                            
+                            badges += f"""<div class="bet-badge {me_cls}"><span>{b['user']}:</span><span class="bb-pick">{pick_txt}</span> (¥{int(b['stake']):,}){pnl_span}</div>"""
                         card_html += f"""<div class="social-bets-container">{badges}</div>"""
                     card_html += "</div>"
                     st.markdown(card_html, unsafe_allow_html=True)
@@ -667,6 +714,12 @@ def main():
             hist = bets.copy()
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
+            
+            # [cite_start]JOIN with results for correct Team Names (History Fix) [cite: 11]
+            if not hist.empty:
+                # Merge logic
+                hist = pd.merge(hist, results[['match_id', 'home', 'away']], on='match_id', how='left')
+            
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
             
@@ -676,13 +729,16 @@ def main():
                 pnl = f"+¥{int((b['stake']*b['odds'])-b['stake']):,}" if res == 'WIN' else (f"-¥{int(b['stake']):,}" if res=='LOSE' else "PENDING")
                 col = "#4ade80" if res=='WIN' else ("#f87171" if res=='LOSE' else "#aaa")
                 
+                # Use Joined Names
+                match_name = f"{b['home']} vs {b['away']}" if pd.notna(b['home']) else b.get('match', 'Unknown Match')
+
                 st.markdown(f"""
                 <div class="hist-card {cls}">
                     <div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace">
                         <span>{b['user']} | {b['gw']}</span>
                         <span style="color:{col}; font-weight:bold;">{pnl}</span>
                     </div>
-                    <div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{b['match']}</div>
+                    <div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div>
                     <div style="font-size:0.8rem; opacity:0.8">
                         <span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> 
                         <span style="opacity:0.6">(@{b['odds']})</span>
