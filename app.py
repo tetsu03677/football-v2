@@ -12,13 +12,13 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS (Native Dark Mode via config.toml)
 # ==============================================================================
-st.set_page_config(page_title="Football App V4.8", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V4.9", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 # Clean CSS: Focus on Layout & Glassmorphism.
 st.markdown("""
 <style>
-    /* --- Layout Fix: Mobile Header Safety (SSOT 4.3) --- */
+    /* --- Layout Fix: Mobile Header Safety --- */
     .block-container {
         padding-top: 4.5rem;
         padding-bottom: 6rem;
@@ -161,7 +161,7 @@ supabase = get_supabase()
 
 def fetch_all_data():
     """
-    Fetch all tables safely and ENFORCE TYPES & SANITIZATION (SSOT 4.1).
+    Fetch all tables safely and ENFORCE ID STRINGIFICATION & SANITIZATION (SSOT 4.1).
     """
     try:
         def get_df_safe(table, expected_cols):
@@ -181,14 +181,14 @@ def fetch_all_data():
         users = get_df_safe("users", ['username','password','role','team'])
         config = get_df_safe("config", ['key','value'])
         
-        # --- 1. Robust Type Enforcement (match_id) ---
-        # Convert to string -> remove '.0' -> convert to int. This handles floats, ints, and strings.
+        # --- 1. Robust Type Enforcement: ID Stringification ---
+        # Convert to string -> remove '.0' -> this ensures '537874' matches '537874.0'
         for df in [bets, results, odds]:
             if not df.empty and 'match_id' in df.columns:
                 df.dropna(subset=['match_id'], inplace=True)
-                df['match_id'] = df['match_id'].astype(str).str.replace(r'\.0$', '', regex=True).astype(int)
+                df['match_id'] = df['match_id'].astype(str).str.replace(r'\.0$', '', regex=True)
 
-        # --- 2. String Sanitization (SSOT 4.1) ---
+        # --- 2. String Sanitization ---
         # Remove whitespace and force uppercase to ensure matching
         if not bets.empty:
             bets['pick'] = bets['pick'].astype(str).str.strip().str.upper()
@@ -270,7 +270,7 @@ def determine_bet_outcome(bet_row, match_row):
     Core Logic: Determine WIN/LOSE based on DB result OR Dynamic Match Status.
     Returns: 'WIN', 'LOSE', 'OPEN'
     """
-    # 1. Trust DB Result if present
+    # 1. Trust DB Result if present (but sanitized)
     db_res = str(bet_row.get('result', '')).strip().upper()
     if db_res in ['WIN', 'LOSE']:
         return db_res
@@ -306,7 +306,7 @@ def calculate_stats(bets_df, results_df, bm_log_df, users_df):
 
     if bets_df.empty: return stats, bm_map
 
-    # Merge bets with results for dynamic checking
+    # Merge bets with results for dynamic checking using STRING match_id
     merged = pd.merge(bets_df, results_df[['match_id', 'status', 'home_score', 'away_score']], on='match_id', how='left')
 
     for _, b in merged.iterrows():
@@ -337,6 +337,7 @@ def calculate_profitable_clubs(bets_df, results_df):
     """Top 3 Profitable Clubs (Dynamic)"""
     if bets_df.empty or results_df.empty: return {}
     
+    # Merge using string match_id
     merged = pd.merge(bets_df, results_df, on='match_id', how='inner')
     user_club_pnl = {} 
     
@@ -371,6 +372,7 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
     gw_bets = bets_df[bets_df['gw'] == target_gw].copy() if not bets_df.empty else pd.DataFrame()
     
     if not gw_bets.empty:
+        # Merge using string match_id
         gw_bets = pd.merge(gw_bets, results_df[['match_id', 'status', 'home_score', 'away_score']], on='match_id', how='left')
         current_bm = bm_map.get(target_gw)
 
@@ -383,6 +385,7 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
             odds = float(b['odds'])
             pot_win = (stake * odds) - stake
             
+            # Theoretical Max (Dream)
             dream_profit[user] += int(pot_win)
             
             pnl = 0
@@ -393,7 +396,8 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
             elif outcome == 'LOSE':
                 pnl = -stake
             else:
-                status = b.get('status', 'SCHEDULED')
+                # Open - Check In-Play
+                status = str(b.get('status', 'SCHEDULED')).strip().upper()
                 if status not in ['SCHEDULED', 'TIMED', 'POSTPONED', 'FINISHED']:
                     h_sc = int(b['home_score']) if pd.notna(b['home_score']) else 0
                     a_sc = int(b['away_score']) if pd.notna(b['away_score']) else 0
@@ -471,6 +475,7 @@ def check_and_assign_bm(target_gw, bm_log_df, users_df):
     return new_bm
 
 def sync_api(api_token):
+    """Sync API to DB (SSOT 4.1)"""
     if not api_token: return False
     url = "https://api.football-data.org/v4/competitions/PL/matches?season=2025"
     headers = {'X-Auth-Token': api_token}
@@ -480,6 +485,7 @@ def sync_api(api_token):
         data = r.json().get('matches', [])
         upserts = []
         for m in data:
+            # Upsert using numeric match_id (DB handles it as int8)
             upserts.append({
                 "match_id": m['id'], "gw": f"GW{m['matchday']}",
                 "home": m['homeTeam']['name'], "away": m['awayTeam']['name'],
@@ -504,9 +510,9 @@ def main():
     token = get_api_token(config)
 
     # Always sync on start
-    if 'v48_synced' not in st.session_state:
+    if 'v49_synced' not in st.session_state:
         with st.spinner("Syncing..."): sync_api(token)
-        st.session_state['v48_synced'] = True
+        st.session_state['v49_synced'] = True
 
     # --- 2. FETCH LATEST DATA (With Sanitization) ---
     bets, odds, results, bm_log, users, config = fetch_all_data()
@@ -545,10 +551,10 @@ def main():
     nums = "".join([c for c in target_gw if c.isdigit()])
     current_bm = bm_map.get(f"GW{nums}", "Undecided")
     is_bm = (me == current_bm)
-    lock_mins = get_config_value(config, "lock_minutes_before_earliest", 60)
+    lock_mins = get_config_value(config, "lock_minutes_before_earliest", 60) #
     gw_locked = False
     
-    budget_limit = get_config_value(config, "max_total_stake_per_gw", 20000)
+    budget_limit = get_config_value(config, "max_total_stake_per_gw", 20000) #
     current_spend = 0
     if not bets.empty:
         my_gw_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw)]
@@ -573,7 +579,7 @@ def main():
         else: c_h2.markdown(f"<span class='bm-badge'>BM: {current_bm}</span>", unsafe_allow_html=True)
         
         b_col = "#4ade80" if current_spend <= budget_limit else "#f87171"
-        st.markdown(f"""<div class="budget-header">USED: <span style="color:{b_col}">¥{current_spend:,}</span> / LIMIT: ¥{budget_limit:,}</div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="budget-header">USED: <span style="color:{b_col}">¥{current_spend:,}</span> / LIMIT: ¥{budget_limit:,}</div>""", unsafe_allow_html=True) #
 
         if not results.empty:
             matches = results[results['gw'] == target_gw].copy()
@@ -589,7 +595,7 @@ def main():
                         st.info(f"🔒 LOCKED (Starts: {first_ko.strftime('%H:%M')})")
 
                 for _, m in matches.iterrows():
-                    mid = m['match_id']
+                    mid = m['match_id'] # Use sanitized string ID
                     dt_str = m['dt_jst'].strftime('%m/%d %H:%M')
                     
                     o_row = odds[odds['match_id'] == mid]
@@ -757,17 +763,18 @@ def main():
             st.markdown("#### SYSTEM HEALTH")
             b_count = len(bets)
             r_count = len(results)
-            # Debug Stats
+            # Debug Stats using string merge
             merged_debug = pd.merge(bets, results, on='match_id', how='inner')
             m_count = len(merged_debug)
             
             c1, c2, c3 = st.columns(3)
             c1.metric("Total Bets", b_count)
             c2.metric("Merged Bets", m_count)
+            # Pending is count where status != FINISHED in merged results
             c3.metric("Pending (Merged)", len(merged_debug[merged_debug['status'] != 'FINISHED']))
             
             if m_count < b_count:
-                st.error(f"CRITICAL: {b_count - m_count} bets failed to merge with results! Check Match IDs.")
+                st.error(f"CRITICAL: {b_count - m_count} bets failed to merge! Check ID sanitization.")
                 
             st.markdown("#### ODDS EDITOR")
             with st.expander("📝 Update Odds", expanded=True):
@@ -788,7 +795,13 @@ def main():
                         new_d = c2.number_input("D", 0.0, 100.0, def_d, 0.01)
                         new_a = c3.number_input("A", 0.0, 100.0, def_a, 0.01)
                         if st.button("SAVE ODDS", use_container_width=True):
-                            supabase.table("odds").upsert({"match_id": sel_m_id, "home_win": new_h, "draw": new_d, "away_win": new_a}).execute()
+                            # Save needs int8 for DB? Or is DB handling string?
+                            # Supabase expects format matching column type.
+                            # DB column is int8. We pass int.
+                            # But wait, sel_m_id is string from our DF.
+                            # We must convert back to int for DB upsert if DB expects int.
+                            # Postgres is usually strict.
+                            supabase.table("odds").upsert({"match_id": int(sel_m_id), "home_win": new_h, "draw": new_d, "away_win": new_a}).execute()
                             st.success("Updated"); time.sleep(1); st.rerun()
                     else: st.warning("No matches.")
             with st.expander("👑 BM Manual Override"):
