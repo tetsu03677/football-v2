@@ -12,7 +12,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V5.4", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V5.5", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -129,7 +129,7 @@ def get_config_value(config_df, key, default):
     return default
 
 # ==============================================================================
-# 2. Business Logic (Scoped Settlement)
+# 2. Business Logic (Settlement)
 # ==============================================================================
 
 def to_jst(iso_str):
@@ -169,18 +169,14 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
 def extract_gw_num(gw_str):
     try:
         return int(re.sub(r'\D', '', str(gw_str)))
-    except:
-        return 0
+    except: return 0
 
-def settle_bets_scoped():
+def settle_bets_logic(force_all=False):
     """
-    SCOPED FORCE UPDATE: 
-    Updates 'result', 'payout', 'net' for finished matches 
-    ONLY within the range of [Current GW - 5] to [Current GW + 1].
-    Safe to run repeatedly.
+    Core Logic: Updates 'result', 'payout', 'net'.
+    If force_all=True, it ignores GW scoping and updates EVERYTHING finished.
     """
     try:
-        # 1. Fetch RAW data
         b_res = supabase.table("bets").select("*").execute()
         r_res = supabase.table("result").select("*").execute()
         
@@ -189,36 +185,31 @@ def settle_bets_scoped():
         df_b = pd.DataFrame(b_res.data)
         df_r = pd.DataFrame(r_res.data)
         
-        # Nuclear ID
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         
-        # Determine Current GW based on latest matches
-        # Parse GW numbers
-        df_r['gw_num'] = df_r['gw'].apply(extract_gw_num)
-        
-        # Find max GW in results (assuming season is progressing)
-        # Or better: Find GW of matches happening today/recently
-        # For simplicity & robustness: Max GW in DB is usually the current or next one.
-        # Let's take the max GW present in results as "Current" reference point.
-        max_gw = df_r['gw_num'].max()
-        if pd.isna(max_gw) or max_gw == 0: max_gw = 38 # Fallback
-        
-        target_gws = range(max_gw - 5, max_gw + 2) # Scope: Past 5 to Next 1
-        
-        # Filter Data by Scope
-        df_r_scoped = df_r[df_r['gw_num'].isin(target_gws)]
-        
-        # Merge Only Scoped Results
-        merged = pd.merge(df_b, df_r_scoped[['match_id', 'status', 'home_score', 'away_score', 'gw_num']], on='match_id', how='inner')
+        # Scoping Logic
+        if not force_all:
+            df_r['gw_num'] = df_r['gw'].apply(extract_gw_num)
+            max_gw = df_r['gw_num'].max()
+            if pd.isna(max_gw) or max_gw == 0: max_gw = 38
+            target_gws = range(max_gw - 5, max_gw + 2)
+            df_r = df_r[df_r['gw_num'].isin(target_gws)]
+            scope_msg = f"GW {min(target_gws)} to {max(target_gws)}"
+        else:
+            scope_msg = "ALL HISTORY (Full Force)"
+
+        merged = pd.merge(df_b, df_r[['match_id', 'status', 'home_score', 'away_score']], on='match_id', how='inner')
         
         updates_count = 0
         
         for _, row in merged.iterrows():
             match_status = str(row.get('status', '')).strip().upper()
             
-            # FORCE UPDATE for ANY Finished match in this scope
-            # We don't check if net is empty. We OVERWRITE to ensure correctness.
+            # Update criteria: Match FINISHED.
+            # If Force All -> Update regardless of current state.
+            # If Auto -> Update if result is empty or net is 0/null.
+            # Safety: Let's just update if FINISHED to ensure consistency.
             if match_status == 'FINISHED':
                 h_s = int(row['home_score'])
                 a_s = int(row['away_score'])
@@ -232,34 +223,28 @@ def settle_bets_scoped():
                 
                 stake = float(row['stake']) if row['stake'] else 0
                 odds = float(row['odds']) if row['odds'] else 1.0
-                payout = 0
-                net = 0
+                payout = int(stake * odds) if final_res == 'WIN' else 0
+                net = int(payout - stake)
                 
-                if final_res == 'WIN':
-                    payout = int(stake * odds)
-                    net = int(payout - stake)
-                else:
-                    payout = 0
-                    net = int(-stake)
+                # Check if update needed to save API calls
+                curr_res = str(row.get('result', '')).strip().upper()
+                curr_net = float(row.get('net', 0)) if pd.notna(row.get('net')) else 0
                 
-                # Update DB
-                supabase.table("bets").update({
-                    "result": final_res,
-                    "payout": payout,
-                    "net": net
-                }).eq("key", row['key']).execute()
+                # Update if result differs OR net differs (e.g. was NULL)
+                if curr_res != final_res or int(curr_net) != net:
+                    supabase.table("bets").update({
+                        "result": final_res,
+                        "payout": payout,
+                        "net": net
+                    }).eq("key", row['key']).execute()
+                    updates_count += 1
                 
-                updates_count += 1
-                
-        return updates_count, f"GW {min(target_gws)} to {max(target_gws)}"
+        return updates_count, scope_msg
     except Exception as e:
         print(f"Settlement Error: {e}")
         return 0, str(e)
 
 def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
-    """
-    Stats calculation purely based on DB 'net' column + In-Play Sim.
-    """
     if users_df.empty: return {}, {}
     stats = {u: {'balance': 0, 'wins': 0, 'total': 0, 'potential': 0} for u in users_df['username'].unique()}
     bm_map = {}
@@ -276,10 +261,8 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
         user = b['user']
         if user not in stats: continue
         
-        # USE DB VALUES
         db_res = str(b.get('result', '')).strip().upper()
         db_net = float(b['net']) if pd.notna(b['net']) and str(b['net']).strip() != '' else 0
-        
         stake = float(b['stake']) if b['stake'] else 0
         odds = float(b['odds']) if b['odds'] else 1.0
         
@@ -287,13 +270,11 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
         bm = bm_map.get(gw_key)
         
         if db_res in ['WIN', 'LOSE']:
-            # Already settled in DB
             stats[user]['total'] += 1
             stats[user]['balance'] += int(db_net)
             if db_res == 'WIN': stats[user]['wins'] += 1
             if bm and bm in stats and bm != user: stats[bm]['balance'] -= int(db_net)
         else:
-            # Open - Potential only
             stats[user]['potential'] += int((stake * odds) - stake)
 
     return stats, bm_map
@@ -302,18 +283,15 @@ def calculate_profitable_clubs_fixed(bets_df, results_df):
     if bets_df.empty or results_df.empty: return {}
     merged = pd.merge(bets_df, results_df, on='match_id', how='inner')
     user_club_pnl = {}
-    
     for _, row in merged.iterrows():
         if str(row.get('result', '')).strip().upper() == 'WIN':
             user = row['user']
             pick = row['pick']
             team = row['home'] if pick == 'HOME' else (row['away'] if pick == 'AWAY' else None)
             net = float(row['net']) if pd.notna(row['net']) else 0
-            
             if team:
                 if user not in user_club_pnl: user_club_pnl[user] = {}
                 user_club_pnl[user][team] = user_club_pnl[user].get(team, 0) + int(net)
-                
     final_ranking = {}
     for u, clubs in user_club_pnl.items():
         sorted_clubs = sorted(clubs.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -322,7 +300,6 @@ def calculate_profitable_clubs_fixed(bets_df, results_df):
 
 def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, target_gw):
     base_stats, _ = calculate_stats_db_only(bets_df, results_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
-    
     gw_total_pnl = {u: 0 for u in users_df['username'].unique()} 
     dream_profit = {u: 0 for u in users_df['username'].unique()}
     inplay_sim_only = {u: 0 for u in users_df['username'].unique()}
@@ -465,22 +442,18 @@ def determine_bet_outcome(bet_row, match_row):
 def main():
     if not supabase: st.error("DB Error"); st.stop()
     
-    # --- 1. SYNC & FORCE SETTLE ---
+    # --- 1. SYNC & AUTO SETTLE (Scoped) ---
     res_conf = supabase.table("config").select("*").execute()
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
     # Scoped Force Settlement ON EVERY LOAD
-    if 'v54_api_synced' not in st.session_state:
-        with st.spinner("Syncing API & Scoped Settlement..."): 
+    if 'v55_api_synced' not in st.session_state:
+        with st.spinner("Syncing API & Auto-Settling..."): 
             sync_api(token)
-            st.session_state['v54_api_synced'] = True
+            settle_bets_logic(force_all=False) # Auto = Scoped
+            st.session_state['v55_api_synced'] = True
     
-    # Force DB write-back for Scoped GWs
-    count, scope_desc = settle_bets_scoped()
-    if count > 0:
-        st.toast(f"✅ Settled {count} bets ({scope_desc})", icon="💰")
-
     # --- 2. FETCH LATEST DATA ---
     bets, odds, results, bm_log, users, config = fetch_all_data()
     if users.empty: st.warning("User data missing."); st.stop()
@@ -626,9 +599,9 @@ def main():
     # --- TAB 2: LIVE ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
-        if st.button("🔄 REFRESH & SETTLE", use_container_width=True): 
+        if st.button("🔄 REFRESH & AUTO SETTLE", use_container_width=True): 
             sync_api(token)
-            settle_bets_scoped()
+            settle_bets_logic(force_all=False)
             st.rerun()
         
         live_df = calculate_live_leaderboard_data(bets, results, bm_map, users, target_gw)
@@ -738,9 +711,16 @@ def main():
             c1.metric("Total Bets", len(bets))
             c2.metric("Unsettled Finished", unsettled_q)
             
-            if st.button("🚨 FORCE SCOPED SETTLE", type="primary"):
-                count, scope_desc = settle_bets_scoped()
-                st.success(f"Settled {count} bets ({scope_desc})! Reloading..."); time.sleep(1); st.rerun()
+            # Diagnostic View
+            with st.expander("🔍 Match ID Diagnostic (First 5 Merged)", expanded=False):
+                debug_df = pd.merge(bets[['match_id', 'user', 'pick']], results[['match_id', 'status', 'gw']], on='match_id', how='inner').head()
+                st.dataframe(debug_df)
+
+            st.write("---")
+            st.markdown("##### 🚨 DANGER ZONE")
+            if st.button("🚨 FORCE SETTLE (ALL HISTORY)", type="primary", help="Updates ALL finished matches regardless of date."):
+                count, msg = settle_bets_logic(force_all=True)
+                st.success(f"Force Settled {count} bets! ({msg})"); time.sleep(1); st.rerun()
 
             st.markdown("#### ODDS EDITOR")
             with st.expander("📝 Update Odds", expanded=True):
