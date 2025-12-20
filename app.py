@@ -12,7 +12,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V5.9.1", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V5.9.2", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -62,19 +62,19 @@ st.markdown("""
     .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; }
     .live-dot { color: #f87171; animation: pulse 1.5s infinite; font-weight: bold; margin-right:4px; font-size: 1.2rem; line-height: 0; vertical-align: middle;}
     
-    /* History & Summary */
+    /* History Cards */
     .hist-card { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
     
-    /* Summary Header Fixed */
+    /* V5.9.2 Vertical List Summary Styles */
     .summary-box { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; }
     .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
     .summary-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; }
     
-    .summary-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 20px; width: 100%; }
-    .summary-item { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; text-align: center; min-width: 110px; flex: 1; }
-    .s-user { font-size: 0.75rem; opacity: 0.8; margin-bottom: 4px; font-weight:bold; color: #fff; }
+    .summary-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 24px; width: 100%; }
+    .summary-row { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px 20px; }
+    .s-user { font-weight: bold; opacity: 0.9; }
     .s-amt { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; }
     
     .budget-header { font-family: 'Courier New', monospace; text-align: center; margin-bottom: 20px; padding: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; font-size: 0.9rem; }
@@ -469,10 +469,10 @@ def main():
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
-    if 'v591_api_synced' not in st.session_state:
+    if 'v592_api_synced' not in st.session_state:
         with st.spinner("Syncing API & Auto-Settling (Date-Aware)..."): 
             sync_api(token)
-            st.session_state['v591_api_synced'] = True
+            st.session_state['v592_api_synced'] = True
     
     count, scope_desc = settle_bets_date_aware()
     if count > 0:
@@ -672,36 +672,26 @@ def main():
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
             
-            # --- V5.9.1 UI FIX ---
+            # --- V5.9.2 Vertical List Summary ---
             if not hist.empty:
                 total_net = hist['net'].sum()
                 
                 if sel_u != "All":
                     col_str = "#4ade80" if total_net >= 0 else "#f87171"
                     sign = "+" if total_net >= 0 else ""
-                    st.markdown(f"""
-                    <div class="summary-box">
-                        <div class="summary-title">{sel_u} / {sel_g}</div>
-                        <div class="summary-val" style="color:{col_str}">{sign}¥{int(total_net):,}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f"""<div class="summary-box"><div class="summary-title">{sel_u} / {sel_g}</div><div class="summary-val" style="color:{col_str}">{sign}¥{int(total_net):,}</div></div>""", unsafe_allow_html=True)
                 else:
                     user_sums = hist.groupby('user')['net'].sum().reset_index()
                     user_sums = user_sums.sort_values('net', ascending=False)
                     
-                    html_grid = ['<div class="summary-grid">']
+                    html_list = ['<div class="summary-list">']
                     for _, r in user_sums.iterrows():
                         u_net = r['net']
                         u_col = "#4ade80" if u_net >= 0 else "#f87171"
                         u_sign = "+" if u_net >= 0 else ""
-                        html_grid.append(f"""
-                        <div class="summary-item">
-                            <div class="s-user">{r['user']}</div>
-                            <div class="s-amt" style="color:{u_col}">{u_sign}¥{int(u_net):,}</div>
-                        </div>
-                        """)
-                    html_grid.append('</div>')
-                    st.markdown("".join(html_grid), unsafe_allow_html=True)
+                        html_list.append(f"""<div class="summary-row"><div class="s-user">{r['user']}</div><div class="s-amt" style="color:{u_col}">{u_sign}¥{int(u_net):,}</div></div>""")
+                    html_list.append('</div>')
+                    st.markdown("".join(html_list), unsafe_allow_html=True)
             
             st.markdown("---") 
             
