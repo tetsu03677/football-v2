@@ -11,13 +11,13 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS (Native Dark Mode via config.toml)
 # ==============================================================================
-st.set_page_config(page_title="Football App V4.4", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V4.5", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
-# Clean CSS: Focus only on Layout & Glassmorphism.
+# Clean CSS: Focus on Layout & Glassmorphism.
 st.markdown("""
 <style>
-    /* --- Layout Fix: Increased top padding for mobile header safety --- */
+    /* --- Layout Fix: Mobile Header Safety --- */
     .block-container {
         padding-top: 4.5rem;
         padding-bottom: 6rem;
@@ -63,18 +63,13 @@ st.markdown("""
     }
     
     .team-col {
-        flex: 1;
-        width: 0;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: flex-start;
+        flex: 1; width: 0;
+        display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
     }
     
     .team-name { 
         font-weight: 700; font-size: 1.0rem; line-height: 1.2; 
-        min-height: 2.4em;
-        display:flex; align-items:center; justify-content:center;
+        min-height: 2.4em; display:flex; align-items:center; justify-content:center;
         word-wrap: break-word; overflow-wrap: break-word;
     }
     
@@ -90,16 +85,13 @@ st.markdown("""
     }
 
     /* --- Form Guide --- */
-    .form-container { 
-        display: flex; align-items: center; justify-content: center; 
-        gap: 4px; margin-top: 8px; opacity: 0.8; 
-    }
+    .form-container { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; opacity: 0.8; }
     .form-arrow { font-size: 0.5rem; opacity: 0.5; text-transform: uppercase; margin: 0 2px; letter-spacing: 1px; }
     .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; margin: 0 1px;}
     .form-ha { font-size: 0.5rem; opacity: 0.5; font-weight: bold; margin-bottom: 2px; }
     .form-mark { font-size: 0.7rem; font-weight: bold; } 
     
-    /* --- Info Row --- */
+    /* --- Info & Badges --- */
     .info-row {
         display: flex; justify-content: space-around; background: rgba(0,0,0,0.2);
         padding: 10px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px;
@@ -107,7 +99,6 @@ st.markdown("""
     .odds-label { font-size: 0.6rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; }
     .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
 
-    /* --- Social Badges --- */
     .social-bets-container { 
         display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
         padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);
@@ -148,14 +139,10 @@ st.markdown("""
     
     /* --- Budget Header --- */
     .budget-header {
-        font-family: 'Courier New', monospace;
-        text-align: center;
-        margin-bottom: 20px;
-        padding: 10px;
-        background: rgba(255,255,255,0.02);
-        border: 1px solid rgba(255,255,255,0.05);
-        border-radius: 8px;
-        font-size: 0.9rem;
+        font-family: 'Courier New', monospace; text-align: center;
+        margin-bottom: 20px; padding: 10px;
+        background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 8px; font-size: 0.9rem;
     }
     
     /* Clean up */
@@ -216,7 +203,7 @@ def get_config_value(config_df, key, default):
     return default
 
 # ==============================================================================
-# 2. Business Logic
+# 2. Business Logic (Dynamic Settlement)
 # ==============================================================================
 
 def to_jst(iso_str):
@@ -243,7 +230,7 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
     
     if past.empty: return '<span style="opacity:0.2">-</span>'
 
-    past = past.iloc[::-1] # Reverse to make Old -> New
+    past = past.iloc[::-1] # Reverse
 
     html_parts = ['<div class="form-container"><span class="form-arrow">OLD</span>']
     for _, g in past.iterrows():
@@ -252,19 +239,46 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst):
         h = int(g['home_score']) if pd.notna(g['home_score']) else 0
         a = int(g['away_score']) if pd.notna(g['away_score']) else 0
         
-        icon = '<span style="color:#f87171">●</span>' # Lose
-        if h == a: icon = '<span style="color:#9ca3af">●</span>' # Draw
-        elif (is_home and h > a) or (not is_home and a > h): icon = '<span style="color:#4ade80">●</span>' # Win
+        icon = '<span style="color:#f87171">●</span>' 
+        if h == a: icon = '<span style="color:#9ca3af">●</span>'
+        elif (is_home and h > a) or (not is_home and a > h): icon = '<span style="color:#4ade80">●</span>'
         
         html_parts.append(f'<div class="form-item"><span class="form-ha">{ha_label}</span><span class="form-mark">{icon}</span></div>')
     
     html_parts.append('<span class="form-arrow">NEW</span></div>')
     return "".join(html_parts)
 
-def calculate_stats(bets_df, bm_log_df, users_df):
-    """Zero-Sum P&L"""
+def determine_bet_outcome(bet_row, match_row):
+    """
+    Core Logic: Determine WIN/LOSE based on DB result OR Dynamic Match Status.
+    Returns: 'WIN', 'LOSE', 'OPEN'
+    """
+    # 1. Trust DB Result if present
+    db_res = str(bet_row.get('result', '')).upper()
+    if db_res in ['WIN', 'LOSE']:
+        return db_res
+    
+    # 2. Dynamic Check: If match is FINISHED, calculate result
+    status = match_row.get('status', 'SCHEDULED')
+    if status == 'FINISHED':
+        h_s = int(match_row['home_score']) if pd.notna(match_row['home_score']) else 0
+        a_s = int(match_row['away_score']) if pd.notna(match_row['away_score']) else 0
+        
+        outcome = "DRAW"
+        if h_s > a_s: outcome = "HOME"
+        elif a_s > h_s: outcome = "AWAY"
+        
+        return 'WIN' if bet_row['pick'] == outcome else 'LOSE'
+        
+    return 'OPEN'
+
+def calculate_stats(bets_df, results_df, bm_log_df, users_df):
+    """
+    Calculate Total Stats with Dynamic Settlement (No waiting for DB update).
+    """
     if users_df.empty: return {}, {}
     stats = {u: {'balance': 0, 'wins': 0, 'total': 0, 'potential': 0} for u in users_df['username'].unique()}
+    
     bm_map = {}
     if not bm_log_df.empty:
         for _, r in bm_log_df.iterrows():
@@ -273,11 +287,14 @@ def calculate_stats(bets_df, bm_log_df, users_df):
 
     if bets_df.empty: return stats, bm_map
 
-    for _, b in bets_df.iterrows():
+    # Merge bets with results for dynamic checking
+    merged = pd.merge(bets_df, results_df[['match_id', 'status', 'home_score', 'away_score']], on='match_id', how='left')
+
+    for _, b in merged.iterrows():
         user = b['user']
         if user not in stats: continue
-        res = str(b.get('result', '')).upper()
-        is_settled = (res in ['WIN', 'LOSE'])
+        
+        outcome = determine_bet_outcome(b, b) # Pass merged row as both bet and match info source
         stake = float(b['stake']) if b['stake'] else 0
         odds = float(b['odds']) if b['odds'] else 1.0
         
@@ -285,36 +302,37 @@ def calculate_stats(bets_df, bm_log_df, users_df):
         gw_key = f"GW{nums}"
         bm = bm_map.get(gw_key)
         
-        if is_settled:
+        if outcome in ['WIN', 'LOSE']:
             stats[user]['total'] += 1
-            pnl = (stake * odds) - stake if res == 'WIN' else -stake
+            pnl = (stake * odds) - stake if outcome == 'WIN' else -stake
             stats[user]['balance'] += int(pnl)
-            if res == 'WIN': stats[user]['wins'] += 1
+            
+            if outcome == 'WIN': stats[user]['wins'] += 1
             if bm and bm in stats and bm != user: stats[bm]['balance'] -= int(pnl)
         else:
+            # OPEN Bets
             stats[user]['potential'] += int((stake * odds) - stake)
 
     return stats, bm_map
 
 def calculate_profitable_clubs(bets_df, results_df):
-    """Top 3 Profitable Clubs"""
+    """Top 3 Profitable Clubs (Dynamic)"""
     if bets_df.empty or results_df.empty: return {}
-    wins = bets_df[bets_df['result'] == 'WIN'].copy()
-    if wins.empty: return {}
     
+    merged = pd.merge(bets_df, results_df, on='match_id', how='inner')
     user_club_pnl = {} 
-    for _, b in wins.iterrows():
-        user = b['user']
-        mid = b['match_id']
-        pick = b['pick']
-        m_rows = results_df[results_df['match_id'] == mid]
-        if m_rows.empty: continue
-        m = m_rows.iloc[0]
-        team = m['home'] if pick == 'HOME' else (m['away'] if pick == 'AWAY' else None)
-        if team:
-            if user not in user_club_pnl: user_club_pnl[user] = {}
-            profit = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
-            user_club_pnl[user][team] = user_club_pnl[user].get(team, 0) + int(profit)
+    
+    for _, row in merged.iterrows():
+        outcome = determine_bet_outcome(row, row)
+        if outcome == 'WIN':
+            user = row['user']
+            pick = row['pick']
+            team = row['home'] if pick == 'HOME' else (row['away'] if pick == 'AWAY' else None)
+            
+            if team:
+                if user not in user_club_pnl: user_club_pnl[user] = {}
+                profit = (float(row['stake']) * float(row['odds'])) - float(row['stake'])
+                user_club_pnl[user][team] = user_club_pnl[user].get(team, 0) + int(profit)
             
     final_ranking = {}
     for u, clubs in user_club_pnl.items():
@@ -324,104 +342,87 @@ def calculate_profitable_clubs(bets_df, results_df):
 
 def calculate_live_pnl_and_dream(bets_df, results_df, bm_map, users_df, target_gw):
     """
-    Live P&L + Dream Logic (Theoretical Max Profit for GW).
-    Includes real-time P&L for ongoing matches.
+    Live P&L + Dream Logic.
+    Includes:
+    1. Settled P&L (Dynamic)
+    2. In-Play P&L (Simulated)
     """
-    base_stats, _ = calculate_stats(bets_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
+    # Base Stats (Includes Dynamic Settlement of FINISHED matches)
+    base_stats, _ = calculate_stats(bets_df, results_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
     live_data = []
 
+    # Get Bets for Target GW
     gw_bets = bets_df[bets_df['gw'] == target_gw].copy() if not bets_df.empty else pd.DataFrame()
-    
+    if not gw_bets.empty:
+        gw_bets = pd.merge(gw_bets, results_df[['match_id', 'status', 'home_score', 'away_score']], on='match_id', how='left')
+
     sim_pnl = {u: 0 for u in users_df['username'].unique()}
     dream_profit = {u: 0 for u in users_df['username'].unique()}
     current_bm = bm_map.get(target_gw)
     
-    if not gw_bets.empty and not results_df.empty:
+    if not gw_bets.empty:
         for _, b in gw_bets.iterrows():
-            mid = b['match_id']
-            m_row = results_df[results_df['match_id'] == mid]
-            if m_row.empty: continue
-            m = m_row.iloc[0]
+            outcome = determine_bet_outcome(b, b) # Check if already settled
             
-            # --- Dream Logic ---
+            # Dream Logic (Max Potential for this GW)
             pot_win = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
-            dream_profit[b['user']] += int(pot_win)
-            
-            # --- Live P&L Simulation ---
-            res = b.get('result', '')
-            final_pnl = 0
-            is_simulated = False
-            
-            if res == 'WIN':
-                final_pnl = pot_win
-                is_simulated = True
-            elif res == 'LOSE':
-                final_pnl = -float(b['stake'])
-                is_simulated = True
-            else:
-                # Open bet: Check current status
-                if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
-                    h_sc = int(m['home_score']) if pd.notna(m['home_score']) else 0
-                    a_sc = int(m['away_score']) if pd.notna(m['away_score']) else 0
-                    outcome = "DRAW"
-                    if h_sc > a_sc: outcome = "HOME"
-                    elif a_sc > h_sc: outcome = "AWAY"
-                    
-                    if b['pick'] == outcome: final_pnl = pot_win
-                    else: final_pnl = -float(b['stake'])
-                    is_simulated = True
-            
-            if is_simulated:
-                sim_pnl[b['user']] += int(final_pnl)
-                if current_bm and current_bm in sim_pnl and current_bm != b['user']:
-                    sim_pnl[current_bm] -= int(final_pnl)
+            # If already settled as LOSE, dream is 0 for that bet? Or still dream?
+            # Usually dream is for OPEN bets. But let's say "Theoretical Max" implies "If everything went right".
+            # For settled bets, we take the actual result. For open bets, we take the win.
+            if outcome == 'WIN': dream_profit[b['user']] += int(pot_win)
+            elif outcome == 'LOSE': dream_profit[b['user']] += int(-float(b['stake']))
+            else: dream_profit[b['user']] += int(pot_win) # Open -> Assume Win
 
-    for u, s in base_stats.items():
-        # Live Leaderboard includes settled bets (from base_stats) + unsettled simulations
-        # But base_stats ALREADY includes settled bets pnl.
-        # sim_pnl calculated above includes settled bets too if we logic it so.
-        # Wait, to avoid double counting:
-        # base_stats = confirmed history P&L
-        # sim_pnl = P&L for CURRENT GW bets (both settled and ongoing in this GW)
-        # However, calculate_stats iterates ALL bets.
-        # If a bet is settled, it's in base_stats.
-        # If we add sim_pnl (which includes settled GW bets), we double count.
-        
-        # FIX: Base stats should be Total Balance.
-        # We want "Live Balance" = Base Balance + (Unsettled Open Bets P&L based on Live Score)
-        # So we should ONLY simulate if res == '' (OPEN).
-        pass 
-
-    # Re-calc properly
-    sim_delta = {u: 0 for u in users_df['username'].unique()}
-    if not gw_bets.empty and not results_df.empty:
-        for _, b in gw_bets.iterrows():
-            if b.get('result', '') == '': # Only Open Bets
-                mid = b['match_id']
-                m_row = results_df[results_df['match_id'] == mid]
-                if m_row.empty: continue
-                m = m_row.iloc[0]
-                if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
-                    pot_win = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
-                    h_sc = int(m['home_score']) if pd.notna(m['home_score']) else 0
-                    a_sc = int(m['away_score']) if pd.notna(m['away_score']) else 0
-                    outcome = "DRAW"
-                    if h_sc > a_sc: outcome = "HOME"
-                    elif a_sc > h_sc: outcome = "AWAY"
+            # Live P&L Logic (Only add In-Play simulation to Base Stats)
+            # Base Stats already has FINISHED/SETTLED.
+            # We need to simulate only if OPEN and IN_PLAY.
+            
+            if outcome == 'OPEN':
+                status = b.get('status', 'SCHEDULED')
+                if status not in ['SCHEDULED', 'TIMED', 'POSTPONED', 'FINISHED']:
+                    # IN PLAY Simulation
+                    h_sc = int(b['home_score']) if pd.notna(b['home_score']) else 0
+                    a_sc = int(b['away_score']) if pd.notna(b['away_score']) else 0
                     
-                    pnl = pot_win if b['pick'] == outcome else -float(b['stake'])
-                    sim_delta[b['user']] += int(pnl)
-                    if current_bm and current_bm in sim_delta and current_bm != b['user']:
-                        sim_delta[current_bm] -= int(pnl)
+                    curr_outcome = "DRAW"
+                    if h_sc > a_sc: curr_outcome = "HOME"
+                    elif a_sc > h_sc: curr_outcome = "AWAY"
+                    
+                    pnl = 0
+                    if b['pick'] == curr_outcome: pnl = pot_win
+                    else: pnl = -float(b['stake'])
+                    
+                    sim_pnl[b['user']] += int(pnl)
+                    if current_bm and current_bm in sim_pnl and current_bm != b['user']:
+                        sim_pnl[current_bm] -= int(pnl)
 
     for u, s in base_stats.items():
         live_data.append({
             'User': u, 
-            'Total': s['balance'] + sim_delta.get(u, 0), 
-            'LiveDiff': sim_delta.get(u, 0),
-            'DreamProfit': dream_profit.get(u, 0)
+            'Total': s['balance'] + sim_pnl.get(u, 0), # Base (Dynamic) + Sim (In-Play)
+            'LiveDiff': sim_pnl.get(u, 0),
+            'DreamProfit': s['balance'] + (dream_profit.get(u, 0) - s.get('balance',0)) # Logic tweak: Dream Total
+            # Simplified Dream: Just show the Potential Profit Sum for this GW
         })
-    return pd.DataFrame(live_data).sort_values('Total', ascending=False)
+        
+    # Re-calculate Dream correctly: 
+    # Current Balance + (Sum of Potential Profit of ALL OPEN BETS in GW)
+    # Actually user asked for "Theoretical Profit of that GW". 
+    # Let's just sum (Stake*Odds - Stake) for ALL bets in target GW and display that as "Potential"
+    
+    dream_gw_only = {u: 0 for u in users_df['username'].unique()}
+    if not gw_bets.empty:
+        for _, b in gw_bets.iterrows():
+            pot = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
+            dream_gw_only[b['user']] += int(pot)
+            
+    # Update Live Data with correct Dream
+    final_live_data = []
+    for d in live_data:
+        d['DreamProfit'] = dream_gw_only.get(d['User'], 0)
+        final_live_data.append(d)
+
+    return pd.DataFrame(final_live_data).sort_values('Total', ascending=False)
 
 def get_strict_target_gw(results_df):
     """Strict Future Mode"""
@@ -447,7 +448,6 @@ def check_and_assign_bm(target_gw, bm_log_df, users_df):
             r_num = "".join([c for c in str(r['gw']) if c.isdigit()])
             if r_num == nums: existing = True; break
     if existing: return
-    
     all_users = users_df['username'].tolist()
     counts = {u: 0 for u in all_users}
     last_bm = None
@@ -518,9 +518,10 @@ def main():
     role = st.session_state.get('role', 'user')
     token = get_api_token(config)
 
-    if 'v44_synced' not in st.session_state:
+    # Force Sync on Load to ensure Dynamic Settlement is fresh
+    if 'v45_synced' not in st.session_state:
         with st.spinner("Syncing..."): sync_api(token)
-        st.session_state['v44_synced'] = True; st.rerun()
+        st.session_state['v45_synced'] = True; st.rerun()
 
     target_gw = get_strict_target_gw(results)
     check_and_assign_bm(target_gw, bm_log, users)
@@ -528,7 +529,9 @@ def main():
     bm_log_refresh = supabase.table("bm_log").select("*").execute()
     bm_log = pd.DataFrame(bm_log_refresh.data) if bm_log_refresh.data else bm_log
 
-    stats, bm_map = calculate_stats(bets, bm_log, users)
+    # Calculate Stats with Dynamic Settlement (Pass results now)
+    stats, bm_map = calculate_stats(bets, results, bm_log, users)
+    
     nums = "".join([c for c in target_gw if c.isdigit()])
     current_bm = bm_map.get(f"GW{nums}", "Undecided")
     is_bm = (me == current_bm)
@@ -556,19 +559,13 @@ def main():
 
     # --- TAB 1: MATCHES ---
     with t1:
-        # Header Info
         c_h1, c_h2 = st.columns([3, 1])
         c_h1.markdown(f"### {target_gw}")
         if is_bm: c_h2.markdown(f"<span class='bm-badge'>YOU ARE BM</span>", unsafe_allow_html=True)
         else: c_h2.markdown(f"<span class='bm-badge'>BM: {current_bm}</span>", unsafe_allow_html=True)
         
-        # Budget Tracker
         b_col = "#4ade80" if current_spend <= budget_limit else "#f87171"
-        st.markdown(f"""
-        <div class="budget-header">
-            USED: <span style="color:{b_col}">¥{current_spend:,}</span> / LIMIT: ¥{budget_limit:,}
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="budget-header">USED: <span style="color:{b_col}">¥{current_spend:,}</span> / LIMIT: ¥{budget_limit:,}</div>""", unsafe_allow_html=True)
 
         if not results.empty:
             matches = results[results['gw'] == target_gw].copy()
@@ -611,21 +608,15 @@ def main():
                             me_cls = "me" if b['user'] == me else ""
                             pick_txt = b['pick'][:4]
                             
-                            # P&L Display for Finished Match
+                            # Matches P&L Display (Dynamic Check)
                             pnl_span = ""
-                            if m['status'] == 'FINISHED':
+                            outcome = determine_bet_outcome(b, m)
+                            if outcome == 'WIN':
                                 b_win = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
-                                b_pnl = 0
-                                outcome = "DRAW"
-                                if h_s > a_s: outcome = "HOME"
-                                elif a_s > h_s: outcome = "AWAY"
-                                
-                                if b['pick'] == outcome:
-                                    b_pnl = b_win
-                                    pnl_span = f"<span class='bb-res-win'>+¥{int(b_pnl):,}</span>"
-                                else:
-                                    b_pnl = -float(b['stake'])
-                                    pnl_span = f"<span class='bb-res-lose'>-¥{int(abs(b_pnl)):,}</span>"
+                                pnl_span = f"<span class='bb-res-win'>+¥{int(b_win):,}</span>"
+                            elif outcome == 'LOSE':
+                                b_pnl = -float(b['stake'])
+                                pnl_span = f"<span class='bb-res-lose'>-¥{int(abs(b_pnl)):,}</span>"
                             
                             badges += f"""<div class="bet-badge {me_cls}"><span>{b['user']}:</span><span class="bb-pick">{pick_txt}</span> (¥{int(b['stake']):,}){pnl_span}</div>"""
                         card_html += f"""<div class="social-bets-container">{badges}</div>"""
@@ -648,13 +639,11 @@ def main():
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
                             
-                            # Budget Check
                             new_total = current_spend - (int(my_bet.iloc[0]['stake']) if not my_bet.empty else 0) + stake
                             over_budget = new_total > budget_limit
                             
                             if c_b.form_submit_button("BET", use_container_width=True):
-                                if over_budget:
-                                    st.error(f"Over Budget! Limit: ¥{budget_limit:,}")
+                                if over_budget: st.error(f"Over Budget! Limit: ¥{budget_limit:,}")
                                 else:
                                     to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
                                     pl = {"key": f"{m['gw']}:{me}:{mid}", "gw": m['gw'], "user": me, "match_id": mid, "match": f"{m['home']} vs {m['away']}", "pick": pick, "stake": stake, "odds": to, "placed_at": datetime.datetime.now(JST).isoformat(), "status": "OPEN", "result": ""}
@@ -672,29 +661,13 @@ def main():
         
         st.markdown("#### LEADERBOARD")
         if not live_df.empty:
-            # Ranking by Total
             rank = 1
             for _, r in live_df.iterrows():
                 diff = r['LiveDiff']
                 diff_str = f"+¥{diff:,}" if diff > 0 else (f"¥{diff:,}" if diff < 0 else "-")
                 col = "#4ade80" if diff > 0 else ("#f87171" if diff < 0 else "#666")
-                
                 dream_val = r['DreamProfit']
-                
-                st.markdown(f"""
-                <div style="display:flex; flex-direction:column; padding:12px; background:rgba(255,255,255,0.03); margin-bottom:8px; border-radius:6px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div style="font-weight:bold; font-size:1.1rem; color:#fbbf24; width:30px">#{rank}</div>
-                        <div style="flex:1; font-weight:bold;">{r['User']}</div>
-                        <div style="text-align:right;">
-                            <div style="font-weight:bold; font-family:monospace">¥{int(r['Total']):,}</div>
-                            <div style="font-size:0.8rem; color:{col}; font-family:monospace">({diff_str})</div>
-                        </div>
-                    </div>
-                    <div style="text-align:right; font-size:0.7rem; opacity:0.6; margin-top:4px;">
-                        THEORETICAL GW PROFIT: <span style="color:#a5b4fc">¥{int(dream_val):,}</span>
-                    </div>
-                </div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div style="display:flex; flex-direction:column; padding:12px; background:rgba(255,255,255,0.03); margin-bottom:8px; border-radius:6px;"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="font-weight:bold; font-size:1.1rem; color:#fbbf24; width:30px">#{rank}</div><div style="flex:1; font-weight:bold;">{r['User']}</div><div style="text-align:right;"><div style="font-weight:bold; font-family:monospace">¥{int(r['Total']):,}</div><div style="font-size:0.8rem; color:{col}; font-family:monospace">({diff_str})</div></div></div><div style="text-align:right; font-size:0.7rem; opacity:0.6; margin-top:4px;">THEORETICAL GW PROFIT: <span style="color:#a5b4fc">¥{int(dream_val):,}</span></div></div>""", unsafe_allow_html=True)
                 rank += 1
         
         st.markdown("#### SCOREBOARD")
@@ -711,20 +684,7 @@ def main():
                     parts = []
                     for _, b in mb.iterrows(): parts.append(f"{b['user']}:{b['pick'][0]}")
                     stake_str = " ".join(parts)
-
-                st.markdown(f"""
-                <div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05)">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div>
-                        <div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div>
-                        <div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div>
-                    </div>
-                    <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase">
-                        <span>{sts_disp}</span>
-                        <span>{stake_str}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05)"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><span>{sts_disp}</span><span>{stake_str}</span></div></div>""", unsafe_allow_html=True)
 
     # --- TAB 3: HISTORY ---
     with t3:
@@ -736,43 +696,33 @@ def main():
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
             
-            # JOIN with results for correct Team Names (History Fix)
-            if not hist.empty:
-                # Merge logic
-                hist = pd.merge(hist, results[['match_id', 'home', 'away']], on='match_id', how='left')
-            
+            # Use results for dynamic status check and name fix
+            hist = pd.merge(hist, results[['match_id', 'home', 'away', 'status', 'home_score', 'away_score']], on='match_id', how='left')
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
             
             for _, b in hist.iterrows():
-                res = b['result'] if b['result'] else "OPEN"
-                cls = "h-win" if res == 'WIN' else ("h-lose" if res == 'LOSE' else "")
-                pnl = f"+¥{int((b['stake']*b['odds'])-b['stake']):,}" if res == 'WIN' else (f"-¥{int(b['stake']):,}" if res=='LOSE' else "PENDING")
-                col = "#4ade80" if res=='WIN' else ("#f87171" if res=='LOSE' else "#aaa")
+                outcome = determine_bet_outcome(b, b) # Dynamic Status
+                cls = "h-win" if outcome == 'WIN' else ("h-lose" if outcome == 'LOSE' else "")
                 
-                # Use Joined Names
-                match_name = f"{b['home']} vs {b['away']}" if pd.notna(b['home']) else b.get('match', 'Unknown Match')
+                pnl = "PENDING"
+                col = "#aaa"
+                if outcome == 'WIN':
+                    val = (b['stake']*b['odds'])-b['stake']
+                    pnl = f"+¥{int(val):,}"
+                    col = "#4ade80"
+                elif outcome == 'LOSE':
+                    pnl = f"-¥{int(b['stake']):,}"
+                    col = "#f87171"
+                
+                match_name = f"{b['home']} vs {b['away']}" if pd.notna(b['home']) else b.get('match', 'Unknown')
 
-                st.markdown(f"""
-                <div class="hist-card {cls}">
-                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace">
-                        <span>{b['user']} | {b['gw']}</span>
-                        <span style="color:{col}; font-weight:bold;">{pnl}</span>
-                    </div>
-                    <div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div>
-                    <div style="font-size:0.8rem; opacity:0.8">
-                        <span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> 
-                        <span style="opacity:0.6">(@{b['odds']})</span>
-                        <span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(f"""<div class="hist-card {cls}"><div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace"><span>{b['user']} | {b['gw']}</span><span style="color:{col}; font-weight:bold;">{pnl}</span></div><div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div><div style="font-size:0.8rem; opacity:0.8"><span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> <span style="opacity:0.6">(@{b['odds']})</span><span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span></div></div>""", unsafe_allow_html=True)
         else: st.info("No history.")
 
     # --- TAB 4: DASHBOARD ---
     with t4:
         st.markdown("### 🏆 DASHBOARD")
-        
         my_s = stats.get(me, {'balance':0, 'wins':0, 'total':0})
         win_rate = (my_s['wins']/my_s['total']*100) if my_s['total'] else 0
         c1, c2, c3 = st.columns(3)
@@ -781,7 +731,6 @@ def main():
         with c3: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>GW</div><div class='kpi-val'>{target_gw}</div></div>", unsafe_allow_html=True)
         
         st.markdown("---")
-        
         st.markdown("#### 💰 PROFITABLE CLUBS")
         prof_data = calculate_profitable_clubs(bets, results)
         if prof_data:
@@ -790,8 +739,7 @@ def main():
                 with c_cols[i]:
                     st.markdown(f"**{u}**")
                     if clubs:
-                        for j, (team, amt) in enumerate(clubs):
-                            st.markdown(f"<div class='rank-list-item'><span class='rank-pos'>{j+1}.</span> <span style='flex:1'>{team}</span> <span class='prof-amt'>+¥{amt:,}</span></div>", unsafe_allow_html=True)
+                        for j, (team, amt) in enumerate(clubs): st.markdown(f"<div class='rank-list-item'><span class='rank-pos'>{j+1}.</span> <span style='flex:1'>{team}</span> <span class='prof-amt'>+¥{amt:,}</span></div>", unsafe_allow_html=True)
                     else: st.caption("No wins yet.")
         else: st.info("No data.")
 
@@ -800,8 +748,7 @@ def main():
         if not bm_log.empty:
             bm_counts = bm_log['bookmaker'].value_counts().reset_index()
             bm_counts.columns = ['User', 'Count']
-            for _, r in bm_counts.iterrows():
-                st.markdown(f"<div class='rank-list-item'><span style='flex:1'>{r['User']}</span> <span style='font-weight:bold'>{r['Count']} times</span></div>", unsafe_allow_html=True)
+            for _, r in bm_counts.iterrows(): st.markdown(f"<div class='rank-list-item'><span style='flex:1'>{r['User']}</span> <span style='font-weight:bold'>{r['Count']} times</span></div>", unsafe_allow_html=True)
 
     # --- TAB 5: ADMIN ---
     with t5:
