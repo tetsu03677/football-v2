@@ -12,7 +12,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V5.7", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V5.8", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -55,6 +55,12 @@ st.markdown("""
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
     .budget-header { font-family: 'Courier New', monospace; text-align: center; margin-bottom: 20px; padding: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; font-size: 0.9rem; }
+    /* Summary Header for History */
+    .summary-box { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; text-align: center; margin-bottom: 16px; }
+    .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+    .summary-val { font-size: 1.8rem; font-weight: 800; font-family: 'Courier New', monospace; }
+    .summary-grid { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; }
+    .summary-item { min-width: 100px; flex: 1; background: rgba(255,255,255,0.03); border-radius: 6px; padding: 10px; text-align: center; border: 1px solid rgba(255,255,255,0.05); }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
@@ -174,11 +180,9 @@ def extract_gw_num(gw_str):
 def settle_bets_date_aware():
     """
     DATE-BASED SCOPED UPDATE (V5.7):
-    Identifies 'Current GW' using actual TIMESTAMP, NOT Max ID.
-    Updates Finished matches in [Current-10 to Current+1].
+    Identifies 'Current GW' using actual TIMESTAMP.
     """
     try:
-        # 1. Fetch RAW data
         b_res = supabase.table("bets").select("*").execute()
         r_res = supabase.table("result").select("*").execute()
         
@@ -187,35 +191,24 @@ def settle_bets_date_aware():
         df_b = pd.DataFrame(b_res.data)
         df_r = pd.DataFrame(r_res.data)
         
-        # Nuclear ID
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         
-        # --- DATE AWARE LOGIC START ---
         df_r['dt_jst'] = df_r['utc_kickoff'].apply(to_jst)
         df_r['gw_num'] = df_r['gw'].apply(extract_gw_num)
         
         now = datetime.datetime.now(JST)
-        
-        # Find matches that started before now (Past/Current matches)
         past_matches = df_r[df_r['dt_jst'] < now].sort_values('dt_jst', ascending=False)
         
-        current_gw = 38 # Default to end
+        current_gw = 38 
         if not past_matches.empty:
-            # The most recent match's GW is likely the "Current" or "Just Finished" GW
             current_gw = past_matches.iloc[0]['gw_num']
             
-        # Scope: Look back 10 weeks (to cover "since I started app") and forward 1
         target_gws = range(current_gw - 10, current_gw + 2)
-        # --- DATE AWARE LOGIC END ---
         
-        # Filter Data by Scope
         df_r_scoped = df_r[df_r['gw_num'].isin(target_gws)].copy()
-        
-        # Rename Status
         df_r_scoped = df_r_scoped.rename(columns={'status': 'match_status'})
         
-        # Merge
         merged = pd.merge(df_b, df_r_scoped[['match_id', 'match_status', 'home_score', 'away_score', 'gw_num']], on='match_id', how='inner')
         
         updates_count = 0
@@ -226,7 +219,6 @@ def settle_bets_date_aware():
             if m_status == 'FINISHED':
                 h_s = int(row['home_score'])
                 a_s = int(row['away_score'])
-                
                 outcome = "DRAW"
                 if h_s > a_s: outcome = "HOME"
                 elif a_s > h_s: outcome = "AWAY"
@@ -239,7 +231,6 @@ def settle_bets_date_aware():
                 payout = int(stake * odds) if final_res == 'WIN' else 0
                 net = int(payout - stake)
                 
-                # Check if update needed
                 curr_res = str(row.get('result', '')).strip().upper()
                 curr_net = float(row.get('net', 0)) if pd.notna(row.get('net')) else 0
                 
@@ -267,7 +258,6 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
 
     if bets_df.empty: return stats, bm_map
 
-    # Rename
     results_safe = results_df.rename(columns={'status': 'match_status'})
     merged = pd.merge(bets_df, results_safe[['match_id', 'match_status', 'home_score', 'away_score']], on='match_id', how='left')
 
@@ -354,7 +344,6 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
                     curr_outcome = "DRAW"
                     if h_sc > a_sc: curr_outcome = "HOME"
                     elif a_sc > h_sc: curr_outcome = "AWAY"
-                    
                     if b['pick'] == curr_outcome: pnl = pot_win
                     else: pnl = -stake
                     is_inplay = True
@@ -466,11 +455,10 @@ def main():
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
 
-    # Scoped Force Settlement ON EVERY LOAD
-    if 'v57_api_synced' not in st.session_state:
+    if 'v58_api_synced' not in st.session_state:
         with st.spinner("Syncing API & Auto-Settling (Date-Aware)..."): 
             sync_api(token)
-            st.session_state['v57_api_synced'] = True
+            st.session_state['v58_api_synced'] = True
     
     count, scope_desc = settle_bets_date_aware()
     if count > 0:
@@ -670,6 +658,41 @@ def main():
             hist = pd.merge(hist, results_safe[['match_id', 'home', 'away', 'match_status']], on='match_id', how='left')
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
+            
+            # --- V5.8: Summary Header Calculation ---
+            if not hist.empty:
+                total_net = hist['net'].sum()
+                
+                # Show summary
+                if sel_u != "All":
+                    # Specific User View
+                    col_str = "#4ade80" if total_net >= 0 else "#f87171"
+                    sign = "+" if total_net >= 0 else ""
+                    st.markdown(f"""
+                    <div class="summary-box">
+                        <div class="summary-title">{sel_u} / {sel_g}</div>
+                        <div class="summary-val" style="color:{col_str}">{sign}¥{int(total_net):,}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    # All Users View (Breakdown)
+                    user_sums = hist.groupby('user')['net'].sum().reset_index()
+                    user_sums = user_sums.sort_values('net', ascending=False)
+                    
+                    html_items = ""
+                    for _, r in user_sums.iterrows():
+                        u_net = r['net']
+                        u_col = "#4ade80" if u_net >= 0 else "#f87171"
+                        u_sign = "+" if u_net >= 0 else ""
+                        html_items += f"""
+                        <div class="summary-item">
+                            <div style="font-size:0.7rem; opacity:0.8">{r['user']}</div>
+                            <div style="font-weight:bold; color:{u_col}">{u_sign}¥{int(u_net):,}</div>
+                        </div>
+                        """
+                    st.markdown(f"""<div class="summary-grid">{html_items}</div>""", unsafe_allow_html=True)
+            
+            st.markdown("---") # Separator
             
             for _, b in hist.iterrows():
                 db_res = str(b.get('result', '')).strip().upper()
