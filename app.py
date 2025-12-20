@@ -14,10 +14,10 @@ from supabase import create_client
 st.set_page_config(page_title="Football App V4.4", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
-# [cite_start]Clean CSS: Focus only on Layout & Glassmorphism[cite: 10].
+# Clean CSS: Focus only on Layout & Glassmorphism.
 st.markdown("""
 <style>
-    [cite_start]/* --- Layout Fix: Increased top padding for mobile header safety [cite: 10] --- */
+    /* --- Layout Fix: Increased top padding for mobile header safety --- */
     .block-container {
         padding-top: 4.5rem;
         padding-bottom: 6rem;
@@ -188,12 +188,12 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        [cite_start]bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at']) # [cite: 5]
-        [cite_start]odds = get_df_safe("odds", ['match_id','home_win','draw','away_win']) # [cite: 6]
-        [cite_start]results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score']) # [cite: 6]
-        [cite_start]bm_log = get_df_safe("bm_log", ['gw','bookmaker']) # [cite: 7]
-        [cite_start]users = get_df_safe("users", ['username','password','role','team']) # [cite: 7]
-        [cite_start]config = get_df_safe("config", ['key','value']) # [cite: 8]
+        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','gw','placed_at'])
+        odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
+        results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score'])
+        bm_log = get_df_safe("bm_log", ['gw','bookmaker'])
+        users = get_df_safe("users", ['username','password','role','team'])
+        config = get_df_safe("config", ['key','value'])
         return bets, odds, results, bm_log, users, config
     except Exception as e:
         st.error(f"System Error: {e}")
@@ -228,7 +228,7 @@ def to_jst(iso_str):
     except: return None
 
 def get_recent_form_html(team_name, results_df, current_kickoff_jst):
-    [cite_start]"""Generate Form Guide HTML (Old -> New) [cite: 11]"""
+    """Generate Form Guide HTML (Old -> New)"""
     if results_df.empty: return "-"
     if 'dt_jst' not in results_df.columns:
         results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
@@ -324,7 +324,7 @@ def calculate_profitable_clubs(bets_df, results_df):
 
 def calculate_live_pnl_and_dream(bets_df, results_df, bm_map, users_df, target_gw):
     """
-    [cite_start]Live P&L + Dream Logic (Theoretical Max Profit for GW). [cite: 9]
+    Live P&L + Dream Logic (Theoretical Max Profit for GW).
     Includes real-time P&L for ongoing matches.
     """
     base_stats, _ = calculate_stats(bets_df, pd.DataFrame(list(bm_map.items()), columns=['gw','bookmaker']), users_df)
@@ -348,17 +348,16 @@ def calculate_live_pnl_and_dream(bets_df, results_df, bm_map, users_df, target_g
             dream_profit[b['user']] += int(pot_win)
             
             # --- Live P&L Simulation ---
-            # Calculate for ALL matches in this GW if they have a score (FINISHED or IN_PLAY)
-            # Even if result is already set in DB, re-calculate to be sure, or trust DB if settled.
-            # Strategy: If result is 'WIN'/'LOSE' in DB, take that. If not, use current score.
-            
             res = b.get('result', '')
             final_pnl = 0
+            is_simulated = False
             
             if res == 'WIN':
                 final_pnl = pot_win
+                is_simulated = True
             elif res == 'LOSE':
                 final_pnl = -float(b['stake'])
+                is_simulated = True
             else:
                 # Open bet: Check current status
                 if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
@@ -370,18 +369,40 @@ def calculate_live_pnl_and_dream(bets_df, results_df, bm_map, users_df, target_g
                     
                     if b['pick'] == outcome: final_pnl = pot_win
                     else: final_pnl = -float(b['stake'])
+                    is_simulated = True
             
-            # This is "GW specific P&L", so we add it to a tracking dict to show "Live Diff" or just update total
-            # But the requirement is "Live Leaderboard". Base stats has total.
-            # We want to add the *difference* between confirmed and live?
-            # Actually, base_stats includes settled bets. 
-            # If we want "Live" view, we should probably take base_stats (which has settled) 
-            # AND add the "Unsettled but currently winning/losing" bets.
-            # But if a bet is settled in DB, it is in base_stats.
-            # So we only simulate if res == '' (OPEN).
-            
-            if res == '':
-                 if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
+            if is_simulated:
+                sim_pnl[b['user']] += int(final_pnl)
+                if current_bm and current_bm in sim_pnl and current_bm != b['user']:
+                    sim_pnl[current_bm] -= int(final_pnl)
+
+    for u, s in base_stats.items():
+        # Live Leaderboard includes settled bets (from base_stats) + unsettled simulations
+        # But base_stats ALREADY includes settled bets pnl.
+        # sim_pnl calculated above includes settled bets too if we logic it so.
+        # Wait, to avoid double counting:
+        # base_stats = confirmed history P&L
+        # sim_pnl = P&L for CURRENT GW bets (both settled and ongoing in this GW)
+        # However, calculate_stats iterates ALL bets.
+        # If a bet is settled, it's in base_stats.
+        # If we add sim_pnl (which includes settled GW bets), we double count.
+        
+        # FIX: Base stats should be Total Balance.
+        # We want "Live Balance" = Base Balance + (Unsettled Open Bets P&L based on Live Score)
+        # So we should ONLY simulate if res == '' (OPEN).
+        pass 
+
+    # Re-calc properly
+    sim_delta = {u: 0 for u in users_df['username'].unique()}
+    if not gw_bets.empty and not results_df.empty:
+        for _, b in gw_bets.iterrows():
+            if b.get('result', '') == '': # Only Open Bets
+                mid = b['match_id']
+                m_row = results_df[results_df['match_id'] == mid]
+                if m_row.empty: continue
+                m = m_row.iloc[0]
+                if m['status'] not in ['SCHEDULED', 'TIMED', 'POSTPONED']:
+                    pot_win = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
                     h_sc = int(m['home_score']) if pd.notna(m['home_score']) else 0
                     a_sc = int(m['away_score']) if pd.notna(m['away_score']) else 0
                     outcome = "DRAW"
@@ -389,15 +410,15 @@ def calculate_live_pnl_and_dream(bets_df, results_df, bm_map, users_df, target_g
                     elif a_sc > h_sc: outcome = "AWAY"
                     
                     pnl = pot_win if b['pick'] == outcome else -float(b['stake'])
-                    sim_pnl[b['user']] += int(pnl)
-                    if current_bm and current_bm in sim_pnl and current_bm != b['user']:
-                        sim_pnl[current_bm] -= int(pnl)
+                    sim_delta[b['user']] += int(pnl)
+                    if current_bm and current_bm in sim_delta and current_bm != b['user']:
+                        sim_delta[current_bm] -= int(pnl)
 
     for u, s in base_stats.items():
         live_data.append({
             'User': u, 
-            'Total': s['balance'] + sim_pnl.get(u, 0), 
-            'LiveDiff': sim_pnl.get(u, 0),
+            'Total': s['balance'] + sim_delta.get(u, 0), 
+            'LiveDiff': sim_delta.get(u, 0),
             'DreamProfit': dream_profit.get(u, 0)
         })
     return pd.DataFrame(live_data).sort_values('Total', ascending=False)
@@ -516,7 +537,7 @@ def main():
     gw_locked = False
     
     # Budget Logic
-    [cite_start]budget_limit = get_config_value(config, "max_total_stake_per_gw", 20000) # [cite: 8]
+    budget_limit = get_config_value(config, "max_total_stake_per_gw", 20000)
     current_spend = 0
     if not bets.empty:
         my_gw_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw)]
@@ -541,7 +562,7 @@ def main():
         if is_bm: c_h2.markdown(f"<span class='bm-badge'>YOU ARE BM</span>", unsafe_allow_html=True)
         else: c_h2.markdown(f"<span class='bm-badge'>BM: {current_bm}</span>", unsafe_allow_html=True)
         
-        # [cite_start]Budget Tracker [cite: 10]
+        # Budget Tracker
         b_col = "#4ade80" if current_spend <= budget_limit else "#f87171"
         st.markdown(f"""
         <div class="budget-header">
@@ -590,7 +611,7 @@ def main():
                             me_cls = "me" if b['user'] == me else ""
                             pick_txt = b['pick'][:4]
                             
-                            # [cite_start]P&L Display for Finished Match [cite: 11]
+                            # P&L Display for Finished Match
                             pnl_span = ""
                             if m['status'] == 'FINISHED':
                                 b_win = (float(b['stake']) * float(b['odds'])) - float(b['stake'])
@@ -715,7 +736,7 @@ def main():
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
             
-            # [cite_start]JOIN with results for correct Team Names (History Fix) [cite: 11]
+            # JOIN with results for correct Team Names (History Fix)
             if not hist.empty:
                 # Merge logic
                 hist = pd.merge(hist, results[['match_id', 'home', 'away']], on='match_id', how='left')
