@@ -13,19 +13,15 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V6.7", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V6.9", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
 <style>
     /* Layout & Base */
     .block-container { padding-top: 4.5rem; padding-bottom: 6rem; max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
-    
-    /* Cards */
     .app-card-top { border: 1px solid rgba(255,255,255,0.1); border-bottom: none; border-radius: 12px 12px 0 0; padding: 20px 16px 10px 16px; background: rgba(255,255,255,0.03); margin-bottom: 0px; }
     [data-testid="stForm"] { border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 12px 12px; padding: 0 16px 20px 16px; background: rgba(255,255,255,0.015); margin-bottom: 24px; }
-    
-    /* Match Details */
     .card-header { display: flex; justify-content: space-between; font-family: 'Courier New', monospace; font-size: 0.75rem; opacity: 0.7; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; margin-bottom: 16px; letter-spacing: 1px; }
     .matchup-flex { display: flex; align-items: center; justify-content: space-between; text-align: center; gap: 8px; margin-bottom: 16px; }
     .team-col { flex: 1; width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
@@ -33,31 +29,22 @@ st.markdown("""
     .score-col { flex: 0 0 auto; }
     .score-box { font-family: 'Courier New', monospace; font-size: 1.6rem; font-weight: 800; padding: 4px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; letter-spacing: 2px; }
     @media (max-width: 600px) { .team-name { font-size: 0.9rem; } .score-box { font-size: 1.4rem; padding: 2px 8px; } }
-    
-    /* Form Guide */
     .form-container { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; opacity: 0.8; }
     .form-arrow { font-size: 0.5rem; opacity: 0.5; text-transform: uppercase; margin: 0 2px; letter-spacing: 1px; }
     .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; margin: 0 1px;}
     .form-ha { font-size: 0.5rem; opacity: 0.5; font-weight: bold; margin-bottom: 2px; }
     .form-mark { font-size: 0.7rem; font-weight: bold; } 
-    
-    /* Odds & Bets */
     .info-row { display: flex; justify-content: space-around; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; }
     .odds-label { font-size: 0.6rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; }
     .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
     .social-bets-container { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05); }
-    
-    /* Badges */
     .bet-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; border: 1px solid rgba(255,255,255,0.05); color: #ccc; }
     .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); color: #fff; }
     .bet-badge.ai { border: 1px solid rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.15); color: #e9d5ff; }
-    
     .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
     .bb-res-win { color: #4ade80; font-weight: bold; font-family: monospace; }
     .bb-res-lose { color: #f87171; font-weight: bold; font-family: monospace; }
     .bb-res-pot { color: #fbbf24; font-weight: bold; font-family: monospace; opacity: 0.8; }
-    
-    /* Dashboard & Admin */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
     .kpi-label { font-size: 0.65rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px;}
     .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; line-height: 1; }
@@ -67,22 +54,21 @@ st.markdown("""
     .status-msg { text-align: center; opacity: 0.5; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 12px; }
     .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; }
     .live-dot { color: #f87171; animation: pulse 1.5s infinite; font-weight: bold; margin-right:4px; font-size: 1.2rem; line-height: 0; vertical-align: middle;}
-    
-    /* History & Summary */
     .hist-card { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
-    
     .summary-box { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; }
     .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
     .summary-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; }
-    
     .summary-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 24px; width: 100%; }
     .summary-row { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px 20px; }
     .s-user { font-weight: bold; opacity: 0.9; }
     .s-amt { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; }
-    
     .budget-header { font-family: 'Courier New', monospace; text-align: center; margin-bottom: 20px; padding: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; font-size: 0.9rem; }
+    
+    /* V6.9 Admin Mapping */
+    .mapping-box { border: 1px dashed #fbbf24; background: rgba(251, 191, 36, 0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+    .mapping-title { color: #fbbf24; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
     
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
@@ -156,7 +142,6 @@ def get_config_value(config_df, key, default):
     if not row.empty: 
         try: return int(row.iloc[0]['value'])
         except: 
-            # Allow string return if default is string
             if isinstance(default, int): return default
             return row.iloc[0]['value']
     return default
@@ -255,22 +240,7 @@ def settle_bets_date_aware():
         print(f"Settlement Error: {e}")
         return 0, str(e)
 
-# --- AUTO ODDS SYNC (V6.7 Config Driven) ---
-TEAM_NAME_MAP = {
-    "wolves": "wolverhampton",
-    "spurs": "tottenham",
-    "man utd": "manchesterunited",
-    "man city": "manchestercity",
-    "sheffield utd": "sheffieldunited",
-    "nottm forest": "nottinghamforest",
-    "luton": "lutontown",
-    "brighton": "brightonhovealbion",
-    "west ham": "westhamunited",
-    "newcastle": "newcastleunited",
-    "leeds": "leedsunited",
-    "leicester": "leicestercity"
-}
-
+# --- V6.9: DYNAMIC ODDS SYNC (DB Driven) ---
 def normalize_name(name):
     if not name: return ""
     name = name.lower()
@@ -278,10 +248,17 @@ def normalize_name(name):
     return re.sub(r'[^a-z]', '', name)
 
 def sync_odds_rapidapi(results_df, rapidapi_key, season, force_limit=None):
-    if not rapidapi_key or results_df.empty: return 0, "No key or data"
+    if not rapidapi_key or results_df.empty: return 0, [], []
     
+    # 1. Fetch Master Map from DB
+    map_res = supabase.table("team_map").select("*").execute()
+    team_map = {}
+    if map_res.data:
+        for r in map_res.data:
+            team_map[r['api_name']] = r['internal_name']
+
     targets = results_df[results_df['status'].isin(['SCHEDULED', 'TIMED'])].copy()
-    if targets.empty: return 0, "No future matches"
+    if targets.empty: return 0, ["No future matches"], []
     
     if 'dt_jst' not in targets.columns:
         targets['dt_jst'] = targets['utc_kickoff'].apply(to_jst)
@@ -294,26 +271,45 @@ def sync_odds_rapidapi(results_df, rapidapi_key, season, force_limit=None):
     
     synced_count = 0
     logs = []
+    unmapped_api_names = set()
     
     for _, row in targets.iterrows():
         try:
             date_str = pd.to_datetime(row['utc_kickoff']).strftime('%Y-%m-%d')
-            # V6.7: Use Config Driven Season
             url = f"{base_url}/fixtures?date={date_str}&league=39&season={season}"
             r = requests.get(url, headers=headers_direct)
             
             if r.status_code == 200:
                 data = r.json().get('response', [])
-                my_home_norm = normalize_name(row['home'])
+                my_home = row['home']
+                my_home_norm = normalize_name(my_home)
                 
                 found_fixture_id = None
+                
+                # Matching Logic
                 for f in data:
-                    api_home_norm = normalize_name(f['teams']['home']['name'])
-                    if my_home_norm in api_home_norm or api_home_norm in my_home_norm:
+                    api_home_name = f['teams']['home']['name']
+                    api_home_norm = normalize_name(api_home_name)
+                    
+                    # 1. Check DB Map
+                    if api_home_name in team_map:
+                        if team_map[api_home_name] == my_home:
+                            found_fixture_id = f['fixture']['id']
+                            break
+                    
+                    # 2. Fallback: Normalize
+                    elif my_home_norm in api_home_norm or api_home_norm in my_home_norm:
                         found_fixture_id = f['fixture']['id']
                         break
-                
+                    
+                    # Collect candidates for unmapped
+                    else:
+                        # If we can't find ANY match in this loop, we will add these to unmapped later?
+                        # No, we add ALL unmatched names from this response if we fail.
+                        pass
+
                 if found_fixture_id:
+                    # Sync Logic (Same as before)
                     url_odds = f"{base_url}/odds?fixture={found_fixture_id}"
                     r_odds = requests.get(url_odds, headers=headers_direct)
                     if r_odds.status_code == 200:
@@ -328,30 +324,28 @@ def sync_odds_rapidapi(results_df, rapidapi_key, season, force_limit=None):
                                         selected_bm = bm
                                         break
                                 if selected_bm: break
-                            
                             if not selected_bm and bookmakers: selected_bm = bookmakers[0]
-                            
                             if selected_bm:
                                 vals = {v['value']: v['odd'] for v in selected_bm['bets'][0]['values']}
-                                h = vals.get('Home')
-                                d = vals.get('Draw')
-                                a = vals.get('Away')
+                                h, d, a = vals.get('Home'), vals.get('Draw'), vals.get('Away')
                                 if h and d and a:
                                     supabase.table("odds").upsert({
-                                        "match_id": int(row['match_id']),
-                                        "home_win": float(h),
-                                        "draw": float(d),
-                                        "away_win": float(a)
+                                        "match_id": int(row['match_id']), "home_win": float(h), "draw": float(d), "away_win": float(a)
                                     }).execute()
                                     synced_count += 1
-                                    logs.append(f"Synced: {row['home']} ({h}/{d}/{a})")
-                        else: logs.append(f"No odds data: {row['home']}")
-                else: logs.append(f"Fixture not found: {row['home']} (Norm: {my_home_norm})")
+                                    logs.append(f"Synced: {my_home} ({h}/{d}/{a})")
+                else:
+                    # Failed to find match. Add potential names to unmapped list.
+                    logs.append(f"Unmapped: {my_home}")
+                    for f in data:
+                        unmapped_api_names.add(f['teams']['home']['name'])
+                        
             else: logs.append(f"API Error: {r.status_code}")
         except Exception as e:
             logs.append(f"Err: {e}")
             continue
-    return synced_count, logs
+            
+    return synced_count, logs, list(unmapped_api_names)
 
 def calculate_ai_prediction(match_row, odds_df):
     mid = match_row['match_id']
@@ -471,7 +465,7 @@ def get_strict_target_gw(results_df):
     if results_df.empty: return "GW1"
     now_jst = datetime.datetime.now(JST)
     if 'dt_jst' not in results_df.columns: results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
-    season_start = pd.Timestamp("2024-07-01", tz=JST) # Keep static for GW filtering is fine
+    season_start = pd.Timestamp("2024-07-01", tz=JST) 
     current_season = results_df[results_df['dt_jst'] >= season_start]
     if current_season.empty: return "GW1"
     future = current_season[current_season['dt_jst'] > (now_jst - timedelta(hours=4))].sort_values('dt_jst')
@@ -541,16 +535,14 @@ def main():
     token = get_api_token(config)
     rapid_key = get_rapidapi_key()
     
-    # V6.7: Get Season from Config
     target_season = get_config_value(config, "API_FOOTBALL_SEASON", 2024)
 
-    if 'v67_api_synced' not in st.session_state:
+    if 'v69_api_synced' not in st.session_state:
         with st.spinner(f"Syncing Schedule ({target_season}) & Auto-Settling..."): 
             sync_api(token, target_season)
             settle_bets_date_aware()
-            st.session_state['v67_api_synced'] = True
+            st.session_state['v69_api_synced'] = True
     
-    # --- 2. FETCH LATEST DATA ---
     bets, odds, results, bm_log, users, config = fetch_all_data()
     if users.empty: st.warning("User data missing."); st.stop()
 
@@ -573,15 +565,15 @@ def main():
     me = st.session_state['user']
     role = st.session_state.get('role', 'user')
     
-    # --- V6.7: ADMIN AUTO ODDS SYNC (With Config Season & Feedback) ---
-    if role == 'admin' and rapid_key and 'v67_odds_synced' not in st.session_state:
-        n_sync, _ = sync_odds_rapidapi(results, rapid_key, target_season, force_limit=10)
-        if n_sync > 0: 
-            st.toast(f"⚡ Auto-Update: {n_sync} matches odds updated! (Season: {target_season})", icon="✅")
-        else:
-            st.toast(f"⚡ Odds Checked: Up to date (Season: {target_season})", icon="✅")
+    # --- V6.9: ADMIN AUTO ODDS SYNC & MAPPING ---
+    if role == 'admin' and rapid_key and 'v69_odds_synced' not in st.session_state:
+        n_sync, _, unmapped = sync_odds_rapidapi(results, rapid_key, target_season, force_limit=10)
+        if n_sync > 0: st.toast(f"⚡ Auto-Update: {n_sync} matches odds updated! (Season: {target_season})", icon="✅")
+        else: st.toast(f"⚡ Odds Checked: Up to date (Season: {target_season})", icon="✅")
         
-        st.session_state['v67_odds_synced'] = True
+        st.session_state['v69_odds_synced'] = True
+        if unmapped: st.session_state['unmapped_teams'] = unmapped
+        
         odds = supabase.table("odds").select("*").execute()
         odds = pd.DataFrame(odds.data) if odds.data else pd.DataFrame(columns=['match_id','home_win','draw','away_win'])
         odds['match_id'] = pd.to_numeric(odds['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
@@ -745,13 +737,10 @@ def main():
                         u_name = b['user']
                         pick = b['pick']
                         stake = int(b['stake'])
-                        
                         pnl_display = ""
                         pnl_col = "#aaa"
-                        
                         db_res = str(b.get('result', '')).strip().upper()
                         db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
-                        
                         if db_res in ['WIN', 'LOSE']:
                             sign = "+" if db_net > 0 else ""
                             pnl_col = "#4ade80" if db_net > 0 else "#f87171"
@@ -762,7 +751,6 @@ def main():
                             curr = "DRAW"
                             if h_s > a_s: curr = "HOME"
                             elif a_s > h_s: curr = "AWAY"
-                            
                             is_winning = (pick == curr)
                             pot_net = (stake * float(b['odds'])) - stake if is_winning else -stake
                             sign = "+" if pot_net > 0 else ""
@@ -771,9 +759,7 @@ def main():
                         else:
                             pot_win = (stake * float(b['odds'])) - stake
                             pnl_display = f"→ <span style='color:#666; font-size:0.7rem'>+¥{int(pot_win):,}?</span>"
-
                         badges_html.append(f"<div><span style='font-weight:bold'>{u_name}:</span> {pick} <span style='font-family:monospace; opacity:0.7'>(¥{stake:,})</span> {pnl_display}</div>")
-                    
                     stake_str = "<div style='display:flex; flex-direction:column; align-items:flex-end; font-size:0.75rem; gap:2px;'>" + "".join(badges_html) + "</div>"
                 
                 st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05);"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><div style='display:flex; align-items:center'>{sts_disp}</div>{stake_str}</div></div>""", unsafe_allow_html=True)
@@ -876,11 +862,38 @@ def main():
             if st.button("⚡ FORCE SYNC ODDS", type="secondary"):
                 if not rapid_key: st.error("No API-Football Key!")
                 else:
-                    synced_n, logs = sync_odds_rapidapi(results, rapid_key, target_season, force_limit=15)
+                    synced_n, logs, unmapped = sync_odds_rapidapi(results, rapid_key, target_season, force_limit=15)
                     st.success(f"Odds Synced: {synced_n} matches (Season: {target_season})")
                     with st.expander("Sync Logs"):
                         st.write(logs)
+                    
+                    if unmapped:
+                        st.session_state['unmapped_teams'] = unmapped
                     time.sleep(2); st.rerun()
+            
+            # --- V6.9 MAPPING WIDGET ---
+            if 'unmapped_teams' in st.session_state and st.session_state['unmapped_teams']:
+                st.markdown("<div class='mapping-box'><div class='mapping-title'>⚠️ Unmapped Teams Detected</div>", unsafe_allow_html=True)
+                st.caption("API name does not match app name. Please link them.")
+                
+                c_map1, c_map2, c_map3 = st.columns([2,2,1])
+                api_target = c_map1.selectbox("API Name", sorted(list(st.session_state['unmapped_teams'])))
+                
+                # Get unique teams from result table
+                if not results.empty:
+                    app_teams = sorted(list(set(results['home'].unique().tolist() + results['away'].unique().tolist())))
+                else: app_teams = []
+                
+                app_target = c_map2.selectbox("App Name", app_teams)
+                
+                if c_map3.button("🔗 Link", use_container_width=True):
+                    supabase.table("team_map").insert({"api_name": api_target, "internal_name": app_target}).execute()
+                    st.toast(f"Linked: {api_target} -> {app_target}", icon="🔗")
+                    # Remove from unmapped
+                    st.session_state['unmapped_teams'].remove(api_target)
+                    time.sleep(1); st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
             st.markdown("#### ODDS EDITOR")
             with st.expander("📝 Update Odds", expanded=True):
                 if not results.empty:
