@@ -13,7 +13,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V6.4", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V6.5", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -261,7 +261,7 @@ def settle_bets_date_aware():
         print(f"Settlement Error: {e}")
         return 0, str(e)
 
-# --- AUTO ODDS SYNC ---
+# --- AUTO ODDS SYNC (V6.5 Fixed) ---
 def normalize_name(name):
     if not name: return ""
     name = name.lower()
@@ -270,11 +270,18 @@ def normalize_name(name):
 
 def sync_odds_rapidapi(results_df, rapidapi_key, force_limit=None):
     if not rapidapi_key or results_df.empty: return 0, "No key or data"
-    targets = results_df[results_df['status'] == 'SCHEDULED'].copy()
-    if targets.empty: return 0, "No scheduled matches"
+    
+    # V6.5 FIX: Include TIMED matches
+    targets = results_df[results_df['status'].isin(['SCHEDULED', 'TIMED'])].copy()
+    
+    if targets.empty: return 0, "No future matches"
+    
     if 'dt_jst' not in targets.columns:
         targets['dt_jst'] = targets['utc_kickoff'].apply(to_jst)
-    targets = targets.sort_values('dt_jst').head(force_limit if force_limit else 10)
+        
+    # Get future matches only
+    now = datetime.datetime.now(JST)
+    targets = targets[targets['dt_jst'] > now].sort_values('dt_jst').head(force_limit if force_limit else 10)
     
     base_url = "https://v3.football.api-sports.io"
     headers_direct = {'x-apisports-key': rapidapi_key}
@@ -519,11 +526,11 @@ def main():
     token = get_api_token(config)
     rapid_key = get_rapidapi_key()
 
-    if 'v64_api_synced' not in st.session_state:
+    if 'v65_api_synced' not in st.session_state:
         with st.spinner("Syncing Schedule & Auto-Settling..."): 
             sync_api(token)
             settle_bets_date_aware()
-            st.session_state['v64_api_synced'] = True
+            st.session_state['v65_api_synced'] = True
     
     # --- 2. FETCH LATEST DATA ---
     bets, odds, results, bm_log, users, config = fetch_all_data()
@@ -549,12 +556,10 @@ def main():
     role = st.session_state.get('role', 'user')
     
     # --- V6.4: ADMIN AUTO ODDS SYNC (Post-Login) ---
-    if role == 'admin' and rapid_key and 'v64_odds_synced' not in st.session_state:
-        # Sync odds in background for next matches
+    if role == 'admin' and rapid_key and 'v65_odds_synced' not in st.session_state:
         n_sync, _ = sync_odds_rapidapi(results, rapid_key, force_limit=10)
-        if n_sync > 0: st.toast(f"Admin Auto-Sync: Updated odds for {n_sync} matches", icon="⚡")
-        st.session_state['v64_odds_synced'] = True
-        # Reload odds
+        if n_sync > 0: st.toast(f"Auto-Sync: Updated odds for {n_sync} matches", icon="⚡")
+        st.session_state['v65_odds_synced'] = True
         odds = supabase.table("odds").select("*").execute()
         odds = pd.DataFrame(odds.data) if odds.data else pd.DataFrame(columns=['match_id','home_win','draw','away_win'])
         odds['match_id'] = pd.to_numeric(odds['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
@@ -589,7 +594,7 @@ def main():
 
     t1, t2, t3, t4, t5 = st.tabs(["MATCHES", "LIVE", "HISTORY", "DASHBOARD", "ADMIN"])
 
-    # --- TAB 1: MATCHES (V6.4 Match Lock) ---
+    # --- TAB 1: MATCHES ---
     with t1:
         c_h1, c_h2 = st.columns([3, 1])
         c_h1.markdown(f"### {target_gw}")
@@ -609,7 +614,6 @@ def main():
                     mid = m['match_id']
                     dt_str = m['dt_jst'].strftime('%m/%d %H:%M')
                     
-                    # Check Lock per match
                     is_locked = is_match_locked(m['utc_kickoff'], lock_mins)
                     
                     o_row = odds[odds['match_id'] == mid]
@@ -647,7 +651,6 @@ def main():
                     card_html += "</div>"
                     st.markdown(card_html, unsafe_allow_html=True)
 
-                    # Form Display Logic (Match Locked or BM or Closed)
                     is_finished = m['status'] in ['IN_PLAY', 'FINISHED', 'PAUSED']
                     
                     if is_finished or is_locked:
@@ -669,12 +672,11 @@ def main():
                             if c_b.form_submit_button("BET", use_container_width=True):
                                 if over_budget: st.error(f"Over Budget! Limit: ¥{budget_limit:,}")
                                 else:
-                                    # V6.4: FREEZE ODDS AT BET TIME
                                     to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
                                     pl = {
                                         "key": f"{m['gw']}:{me}:{mid}", "gw": m['gw'], "user": me, 
                                         "match_id": int(mid), "match": f"{m['home']} vs {m['away']}", 
-                                        "pick": pick, "stake": stake, "odds": to, # Fixed here
+                                        "pick": pick, "stake": stake, "odds": to, 
                                         "placed_at": datetime.datetime.now(JST).isoformat(), 
                                         "status": "OPEN", "result": "", "payout": 0, "net": 0
                                     }
@@ -683,7 +685,7 @@ def main():
             else: st.info(f"No matches for {target_gw}")
         else: st.info("Loading...")
 
-    # --- TAB 2: LIVE (V6.4 Rich Badges) ---
+    # --- TAB 2: LIVE ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH & SMART SETTLE", use_container_width=True): 
@@ -715,7 +717,6 @@ def main():
                 mb = bets[bets['match_id'] == m['match_id']] if not bets.empty else pd.DataFrame()
                 stake_str = ""
                 
-                # V6.4: Rich Badge Logic
                 if not mb.empty:
                     badges_html = []
                     for _, b in mb.iterrows():
@@ -723,7 +724,6 @@ def main():
                         pick = b['pick']
                         stake = int(b['stake'])
                         
-                        # Calculate current/potential PnL
                         pnl_display = ""
                         pnl_col = "#aaa"
                         
@@ -731,12 +731,10 @@ def main():
                         db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
                         
                         if db_res in ['WIN', 'LOSE']:
-                            # Finished
                             sign = "+" if db_net > 0 else ""
                             pnl_col = "#4ade80" if db_net > 0 else "#f87171"
                             pnl_display = f"→ <span style='color:{pnl_col}'>{sign}¥{int(db_net):,}</span>"
                         elif m['status'] in ['IN_PLAY', 'PAUSED']:
-                            # In-Play Sim
                             h_s = int(m['home_score']) if pd.notna(m['home_score']) else 0
                             a_s = int(m['away_score']) if pd.notna(m['away_score']) else 0
                             curr = "DRAW"
@@ -749,7 +747,6 @@ def main():
                             pnl_col = "#4ade80" if pot_net > 0 else "#f87171"
                             pnl_display = f"→ <span style='color:{pnl_col}'>{sign}¥{int(pot_net):,}</span>"
                         else:
-                            # Scheduled (Potential)
                             pot_win = (stake * float(b['odds'])) - stake
                             pnl_display = f"→ <span style='color:#666; font-size:0.7rem'>+¥{int(pot_win):,}?</span>"
 
