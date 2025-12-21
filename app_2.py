@@ -11,9 +11,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS
+# 0. System Configuration & CSS (V8.2 Base)
 # ==============================================================================
-st.set_page_config(page_title="Football App V8.2", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V8.3", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -21,7 +21,7 @@ st.markdown("""
     /* Layout & Base */
     .block-container { padding-top: 4.5rem; padding-bottom: 6rem; max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
     
-    /* Cards (V6/V7 Rich Style) */
+    /* Cards (V6/V7 Rich Style for Matches/Live) */
     .app-card-top { border: 1px solid rgba(255,255,255,0.1); border-bottom: none; border-radius: 12px 12px 0 0; padding: 20px 16px 10px 16px; background: rgba(255,255,255,0.03); margin-bottom: 0px; }
     [data-testid="stForm"] { border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 12px 12px; padding: 0 16px 20px 16px; background: rgba(255,255,255,0.015); margin-bottom: 24px; }
     
@@ -44,7 +44,7 @@ st.markdown("""
     .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
     .social-bets-container { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05); }
     
-    /* Badges */
+    /* Badges (Rich V7.2 Style) */
     .bet-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; border: 1px solid rgba(255,255,255,0.05); color: #ccc; }
     .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); color: #fff; }
     .bet-badge.ai { border: 1px solid rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.15); color: #e9d5ff; }
@@ -54,7 +54,7 @@ st.markdown("""
     .bb-res-lose { color: #f87171; font-weight: bold; font-family: monospace; }
     .bb-res-pot { color: #fbbf24; font-weight: bold; font-family: monospace; opacity: 0.8; }
     
-    /* Dashboard & Admin */
+    /* Dashboard & Admin & History (Restored V5.9.3 Styles) */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
     .kpi-label { font-size: 0.65rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px;}
     .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; line-height: 1; }
@@ -71,11 +71,11 @@ st.markdown("""
     .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
     .summary-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; }
     .budget-header { font-family: 'Courier New', monospace; text-align: center; margin-bottom: 20px; padding: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; font-size: 0.9rem; }
+    .summary-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 24px; width: 100%; }
+    .summary-row { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px 20px; }
+    .s-user { font-weight: bold; opacity: 0.9; }
+    .s-amt { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; }
     
-    /* Admin Section */
-    .admin-section { padding: 15px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); margin-bottom: 20px; }
-    .admin-header { font-size: 0.9rem; font-weight: bold; color: #fbbf24; margin-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 5px; }
-
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
@@ -144,7 +144,9 @@ def get_config_value(config_df, key, default):
     row = config_df[config_df['key'] == key]
     if not row.empty: 
         try: return int(row.iloc[0]['value'])
-        except: return row.iloc[0]['value']
+        except: 
+            if isinstance(default, int): return default
+            return row.iloc[0]['value']
     return default
 
 def to_jst(iso_str):
@@ -396,7 +398,7 @@ def check_and_assign_bm(target_gw, bm_log_df, users_df):
     supabase.table("bm_log").upsert({"gw": target_gw, "bookmaker": new_bm}).execute()
     return new_bm
 
-# --- CLEAN SYNC LOGIC (V8.2) ---
+# --- CLEAN SYNC LOGIC ---
 def sync_api(api_token, season):
     if not api_token: return False
     url = f"https://api.football-data.org/v4/competitions/PL/matches?season={season}"
@@ -441,11 +443,11 @@ def main():
     
     target_season = get_config_value(config, "API_FOOTBALL_SEASON", 2024)
 
-    if 'v82_api_synced' not in st.session_state:
+    if 'v83_api_synced' not in st.session_state:
         with st.spinner(f"Syncing Schedule ({target_season}) & Auto-Settling..."): 
             sync_api(token, target_season)
             settle_bets_date_aware()
-            st.session_state['v82_api_synced'] = True
+            st.session_state['v83_api_synced'] = True
     
     bets, odds, results, bm_log, users, config = fetch_all_data()
     if users.empty: st.warning("User data missing."); st.stop()
@@ -499,7 +501,7 @@ def main():
 
     t1, t2, t3, t4, t5 = st.tabs(["MATCHES", "LIVE", "HISTORY", "DASHBOARD", "ADMIN"])
 
-    # --- TAB 1: MATCHES ---
+    # --- TAB 1: MATCHES (V8.2: V7.2+AI+Lock) ---
     with t1:
         c_h1, c_h2 = st.columns([3, 1])
         c_h1.markdown(f"### {target_gw}")
@@ -590,7 +592,7 @@ def main():
             else: st.info(f"No matches for {target_gw}")
         else: st.info("Loading...")
 
-    # --- TAB 2: LIVE ---
+    # --- TAB 2: LIVE (V8.2: Rich Scoreboard) ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH & SMART SETTLE", use_container_width=True): 
@@ -655,7 +657,7 @@ def main():
                 
                 st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05);"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><div style='display:flex; align-items:center'>{sts_disp}</div>{stake_str}</div></div>""", unsafe_allow_html=True)
 
-    # --- TAB 3: HISTORY ---
+    # --- TAB 3: HISTORY (V5.9.3 Restored) ---
     with t3:
         if not bets.empty:
             c1, c2 = st.columns(2)
@@ -707,6 +709,33 @@ def main():
                 st.markdown(f"""<div class="hist-card {cls}"><div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace"><span>{b['user']} | {b['gw']}</span><span style="color:{col}; font-weight:bold;">{pnl}</span></div><div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div><div style="font-size:0.8rem; opacity:0.8"><span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> <span style="opacity:0.6">(@{b['odds']})</span><span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span></div></div>""", unsafe_allow_html=True)
         else: st.info("No history.")
 
+    # --- TAB 4: DASHBOARD (V5.9.3 Restored) ---
+    with t4:
+        st.markdown("### 🏆 DASHBOARD")
+        my_s = stats.get(me, {'balance':0, 'wins':0, 'total':0})
+        win_rate = (my_s['wins']/my_s['total']*100) if my_s['total'] else 0
+        c1, c2, c3 = st.columns(3)
+        with c1: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>WIN RATE</div><div class='kpi-val'>{win_rate:.1f}%</div></div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>PROFIT</div><div class='kpi-val'>¥{my_s['balance']:,}</div></div>", unsafe_allow_html=True)
+        with c3: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>GW</div><div class='kpi-val'>{target_gw}</div></div>", unsafe_allow_html=True)
+        st.markdown("---")
+        st.markdown("#### 💰 PROFITABLE CLUBS")
+        prof_data = calculate_profitable_clubs_fixed(bets, results)
+        if prof_data:
+            c_cols = st.columns(len(prof_data))
+            for i, (u, clubs) in enumerate(prof_data.items()):
+                with c_cols[i]:
+                    st.markdown(f"**{u}**")
+                    if clubs:
+                        for j, (team, amt) in enumerate(clubs): st.markdown(f"<div class='rank-list-item'><span class='rank-pos'>{j+1}.</span> <span style='flex:1'>{team}</span> <span class='prof-amt'>+¥{amt:,}</span></div>", unsafe_allow_html=True)
+                    else: st.caption("No wins yet.")
+        st.markdown("---")
+        st.markdown("#### ⚖️ BM STATS")
+        if not bm_log.empty:
+            bm_counts = bm_log['bookmaker'].value_counts().reset_index()
+            bm_counts.columns = ['User', 'Count']
+            for _, r in bm_counts.iterrows(): st.markdown(f"<div class='rank-list-item'><span style='flex:1'>{r['User']}</span> <span style='font-weight:bold'>{r['Count']} times</span></div>", unsafe_allow_html=True)
+
     with t5:
         if role == 'admin':
             st.markdown("<div class='admin-section'><div class='admin-header'>⚙️ CONFIG MANAGER</div>", unsafe_allow_html=True)
@@ -731,12 +760,9 @@ def main():
                 count, scope_desc = settle_bets_date_aware()
                 st.success(f"Settled {count} bets ({scope_desc})! Reloading..."); time.sleep(1); st.rerun()
             
-            # REPAIR BUTTON (V8.2)
             if st.button(f"🔄 FORCE RESYNC (SEASON {target_season})", type="primary", use_container_width=True):
                 with st.spinner("Cleaning old data & Resyncing..."):
-                    # 1. Clean
                     clean_old_data(target_season)
-                    # 2. Sync
                     sync_api(token, target_season)
                     st.success("Database Repaired & Synced!"); time.sleep(1); st.rerun()
             
@@ -747,7 +773,6 @@ def main():
                     matches = results[results['gw'] == target_gw].copy()
                     if not matches.empty:
                         matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
-                        # Filter for current season in dropdown too
                         matches = matches[matches['dt_jst'] >= pd.Timestamp(f"{target_season}-07-01", tz=JST)].sort_values('dt_jst')
                         m_opts = {f"{m['home']} vs {m['away']}": m['match_id'] for _, m in matches.iterrows()}
                         sel_m_name = st.selectbox("Match", list(m_opts.keys()))
