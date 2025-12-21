@@ -13,7 +13,7 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V8.1", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V8.2", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -44,7 +44,7 @@ st.markdown("""
     .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
     .social-bets-container { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05); }
     
-    /* Badges (Rich Style) */
+    /* Badges */
     .bet-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; border: 1px solid rgba(255,255,255,0.05); color: #ccc; }
     .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); color: #fff; }
     .bet-badge.ai { border: 1px solid rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.15); color: #e9d5ff; }
@@ -144,9 +144,7 @@ def get_config_value(config_df, key, default):
     row = config_df[config_df['key'] == key]
     if not row.empty: 
         try: return int(row.iloc[0]['value'])
-        except: 
-            if isinstance(default, int): return default
-            return row.iloc[0]['value']
+        except: return row.iloc[0]['value']
     return default
 
 def to_jst(iso_str):
@@ -161,7 +159,7 @@ def get_recent_form_html(team_name, results_df, current_kickoff_jst, target_seas
     if results_df.empty: return "-"
     if 'dt_jst' not in results_df.columns:
         results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
-    season_start = pd.Timestamp(f"{target_season}-07-01", tz=JST) # Dynamic Season
+    season_start = pd.Timestamp(f"{target_season}-07-01", tz=JST) 
     past = results_df[
         (results_df['dt_jst'] >= season_start) &
         (results_df['status'] == 'FINISHED') & 
@@ -398,7 +396,7 @@ def check_and_assign_bm(target_gw, bm_log_df, users_df):
     supabase.table("bm_log").upsert({"gw": target_gw, "bookmaker": new_bm}).execute()
     return new_bm
 
-# --- V8.1: CONFIG DRIVEN SYNC ---
+# --- CLEAN SYNC LOGIC (V8.2) ---
 def sync_api(api_token, season):
     if not api_token: return False
     url = f"https://api.football-data.org/v4/competitions/PL/matches?season={season}"
@@ -422,6 +420,15 @@ def sync_api(api_token, season):
         return True
     except: return False
 
+def clean_old_data(season):
+    """V8.2: Delete data older than target season start to fix pollution."""
+    try:
+        season_start = f"{season}-07-01T00:00:00Z"
+        # Delete matches where utc_kickoff < season_start
+        supabase.table("result").delete().lt("utc_kickoff", season_start).execute()
+        return True
+    except: return False
+
 # ==============================================================================
 # 3. Main Application
 # ==============================================================================
@@ -434,11 +441,11 @@ def main():
     
     target_season = get_config_value(config, "API_FOOTBALL_SEASON", 2024)
 
-    if 'v81_api_synced' not in st.session_state:
+    if 'v82_api_synced' not in st.session_state:
         with st.spinner(f"Syncing Schedule ({target_season}) & Auto-Settling..."): 
             sync_api(token, target_season)
             settle_bets_date_aware()
-            st.session_state['v81_api_synced'] = True
+            st.session_state['v82_api_synced'] = True
     
     bets, odds, results, bm_log, users, config = fetch_all_data()
     if users.empty: st.warning("User data missing."); st.stop()
@@ -506,7 +513,6 @@ def main():
             matches = results[results['gw'] == target_gw].copy()
             if not matches.empty:
                 matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
-                # STRICT SEASON FILTER
                 matches = matches[matches['dt_jst'] >= pd.Timestamp(f"{target_season}-07-01", tz=JST)].sort_values('dt_jst')
                 
                 for _, m in matches.iterrows():
@@ -725,13 +731,14 @@ def main():
                 count, scope_desc = settle_bets_date_aware()
                 st.success(f"Settled {count} bets ({scope_desc})! Reloading..."); time.sleep(1); st.rerun()
             
-            # CLEAN BUTTON (New)
-            if st.button("🧹 CLEAN OLD SEASON DATA", type="secondary"):
-                # Warning: Only run if sure. This is logic-less in button, just a placeholder for now or advanced
-                # Actually let's just re-sync current season force
-                with st.spinner("Forcing Re-Sync of Current Season..."):
+            # REPAIR BUTTON (V8.2)
+            if st.button(f"🔄 FORCE RESYNC (SEASON {target_season})", type="primary", use_container_width=True):
+                with st.spinner("Cleaning old data & Resyncing..."):
+                    # 1. Clean
+                    clean_old_data(target_season)
+                    # 2. Sync
                     sync_api(token, target_season)
-                    st.success("Refreshed!")
+                    st.success("Database Repaired & Synced!"); time.sleep(1); st.rerun()
             
             st.write("---")
             st.markdown("#### ODDS EDITOR (Manual)")
@@ -740,6 +747,7 @@ def main():
                     matches = results[results['gw'] == target_gw].copy()
                     if not matches.empty:
                         matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
+                        # Filter for current season in dropdown too
                         matches = matches[matches['dt_jst'] >= pd.Timestamp(f"{target_season}-07-01", tz=JST)].sort_values('dt_jst')
                         m_opts = {f"{m['home']} vs {m['away']}": m['match_id'] for _, m in matches.iterrows()}
                         sel_m_name = st.selectbox("Match", list(m_opts.keys()))
