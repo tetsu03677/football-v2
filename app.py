@@ -6,13 +6,14 @@ import time
 import pytz
 import random
 import re
+import json
 from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS
+# 0. System Configuration & CSS (V8.2 Base)
 # ==============================================================================
-st.set_page_config(page_title="Football App V5.9.3", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V8.3", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -20,11 +21,10 @@ st.markdown("""
     /* Layout & Base */
     .block-container { padding-top: 4.5rem; padding-bottom: 6rem; max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
     
-    /* Cards */
+    /* Cards (V6/V7 Rich Style for Matches/Live) */
     .app-card-top { border: 1px solid rgba(255,255,255,0.1); border-bottom: none; border-radius: 12px 12px 0 0; padding: 20px 16px 10px 16px; background: rgba(255,255,255,0.03); margin-bottom: 0px; }
     [data-testid="stForm"] { border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 12px 12px; padding: 0 16px 20px 16px; background: rgba(255,255,255,0.015); margin-bottom: 24px; }
     
-    /* Match Details */
     .card-header { display: flex; justify-content: space-between; font-family: 'Courier New', monospace; font-size: 0.75rem; opacity: 0.7; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; margin-bottom: 16px; letter-spacing: 1px; }
     .matchup-flex { display: flex; align-items: center; justify-content: space-between; text-align: center; gap: 8px; margin-bottom: 16px; }
     .team-col { flex: 1; width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
@@ -33,25 +33,28 @@ st.markdown("""
     .score-box { font-family: 'Courier New', monospace; font-size: 1.6rem; font-weight: 800; padding: 4px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; letter-spacing: 2px; }
     @media (max-width: 600px) { .team-name { font-size: 0.9rem; } .score-box { font-size: 1.4rem; padding: 2px 8px; } }
     
-    /* Form Guide */
     .form-container { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; opacity: 0.8; }
     .form-arrow { font-size: 0.5rem; opacity: 0.5; text-transform: uppercase; margin: 0 2px; letter-spacing: 1px; }
     .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; margin: 0 1px;}
     .form-ha { font-size: 0.5rem; opacity: 0.5; font-weight: bold; margin-bottom: 2px; }
     .form-mark { font-size: 0.7rem; font-weight: bold; } 
     
-    /* Odds & Bets */
     .info-row { display: flex; justify-content: space-around; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; }
     .odds-label { font-size: 0.6rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; }
     .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
     .social-bets-container { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05); }
+    
+    /* Badges (Rich V7.2 Style) */
     .bet-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; border: 1px solid rgba(255,255,255,0.05); color: #ccc; }
     .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); color: #fff; }
-    .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
-    .bb-res-win { color: #4ade80; font-weight: bold; margin-left: 4px; }
-    .bb-res-lose { color: #f87171; font-weight: bold; margin-left: 4px; }
+    .bet-badge.ai { border: 1px solid rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.15); color: #e9d5ff; }
     
-    /* Dashboard & Admin */
+    .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
+    .bb-res-win { color: #4ade80; font-weight: bold; font-family: monospace; }
+    .bb-res-lose { color: #f87171; font-weight: bold; font-family: monospace; }
+    .bb-res-pot { color: #fbbf24; font-weight: bold; font-family: monospace; opacity: 0.8; }
+    
+    /* Dashboard & Admin & History (Restored V5.9.3 Styles) */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
     .kpi-label { font-size: 0.65rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px;}
     .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; line-height: 1; }
@@ -61,25 +64,18 @@ st.markdown("""
     .status-msg { text-align: center; opacity: 0.5; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 12px; }
     .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; }
     .live-dot { color: #f87171; animation: pulse 1.5s infinite; font-weight: bold; margin-right:4px; font-size: 1.2rem; line-height: 0; vertical-align: middle;}
-    
-    /* History Cards */
     .hist-card { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
-    
-    /* V5.9.2 Vertical List Summary Styles */
     .summary-box { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; }
     .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
     .summary-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; }
-    
+    .budget-header { font-family: 'Courier New', monospace; text-align: center; margin-bottom: 20px; padding: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; font-size: 0.9rem; }
     .summary-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 24px; width: 100%; }
     .summary-row { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px 20px; }
     .s-user { font-weight: bold; opacity: 0.9; }
     .s-amt { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; }
     
-    .budget-header { font-family: 'Courier New', monospace; text-align: center; margin-bottom: 20px; padding: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; font-size: 0.9rem; }
-    
-    /* Animations */
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
@@ -97,7 +93,6 @@ def get_supabase():
 supabase = get_supabase()
 
 def fetch_all_data():
-    """Fetch all tables safely with NUCLEAR TYPE CONVERSION."""
     try:
         def get_df_safe(table, expected_cols):
             try:
@@ -116,13 +111,11 @@ def fetch_all_data():
         users = get_df_safe("users", ['username','password','role','team'])
         config = get_df_safe("config", ['key','value'])
         
-        # --- NUCLEAR CONVERSION ---
         for df in [bets, results, odds]:
             if not df.empty and 'match_id' in df.columns:
                 df['match_id'] = pd.to_numeric(df['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
                 df = df[df['match_id'] != '0']
 
-        # --- Sanitization ---
         if not bets.empty:
             bets['pick'] = bets['pick'].astype(str).str.strip().str.upper()
             bets['gw'] = bets['gw'].astype(str).str.strip().str.upper()
@@ -151,12 +144,10 @@ def get_config_value(config_df, key, default):
     row = config_df[config_df['key'] == key]
     if not row.empty: 
         try: return int(row.iloc[0]['value'])
-        except: return row.iloc[0]['value']
+        except: 
+            if isinstance(default, int): return default
+            return row.iloc[0]['value']
     return default
-
-# ==============================================================================
-# 2. Business Logic (Scoped Settlement)
-# ==============================================================================
 
 def to_jst(iso_str):
     if not iso_str: return None
@@ -166,11 +157,11 @@ def to_jst(iso_str):
         return dt.tz_convert(JST)
     except: return None
 
-def get_recent_form_html(team_name, results_df, current_kickoff_jst):
+def get_recent_form_html(team_name, results_df, current_kickoff_jst, target_season):
     if results_df.empty: return "-"
     if 'dt_jst' not in results_df.columns:
         results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
-    season_start = pd.Timestamp("2025-07-01", tz=JST)
+    season_start = pd.Timestamp(f"{target_season}-07-01", tz=JST) 
     past = results_df[
         (results_df['dt_jst'] >= season_start) &
         (results_df['status'] == 'FINISHED') & 
@@ -197,75 +188,79 @@ def extract_gw_num(gw_str):
         return int(re.sub(r'\D', '', str(gw_str)))
     except: return 0
 
+# --- MATCH LOCK LOGIC ---
+def is_match_locked(kickoff_iso, lock_minutes):
+    if not kickoff_iso: return True
+    try:
+        ko_dt = pd.to_datetime(kickoff_iso)
+        if ko_dt.tz is None: ko_dt = ko_dt.tz_localize('UTC')
+        ko_dt = ko_dt.tz_convert(JST)
+        lock_time = ko_dt - timedelta(minutes=lock_minutes)
+        return datetime.datetime.now(JST) >= lock_time
+    except: return True
+
 def settle_bets_date_aware():
-    """
-    DATE-BASED SCOPED UPDATE (V5.7):
-    Identifies 'Current GW' using actual TIMESTAMP.
-    """
     try:
         b_res = supabase.table("bets").select("*").execute()
         r_res = supabase.table("result").select("*").execute()
-        
         if not b_res.data or not r_res.data: return 0, "No data"
-        
         df_b = pd.DataFrame(b_res.data)
         df_r = pd.DataFrame(r_res.data)
-        
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
-        
         df_r['dt_jst'] = df_r['utc_kickoff'].apply(to_jst)
         df_r['gw_num'] = df_r['gw'].apply(extract_gw_num)
-        
         now = datetime.datetime.now(JST)
         past_matches = df_r[df_r['dt_jst'] < now].sort_values('dt_jst', ascending=False)
-        
         current_gw = 38 
-        if not past_matches.empty:
-            current_gw = past_matches.iloc[0]['gw_num']
-            
+        if not past_matches.empty: current_gw = past_matches.iloc[0]['gw_num']
         target_gws = range(current_gw - 10, current_gw + 2)
-        
         df_r_scoped = df_r[df_r['gw_num'].isin(target_gws)].copy()
         df_r_scoped = df_r_scoped.rename(columns={'status': 'match_status'})
-        
         merged = pd.merge(df_b, df_r_scoped[['match_id', 'match_status', 'home_score', 'away_score', 'gw_num']], on='match_id', how='inner')
-        
         updates_count = 0
-        
         for _, row in merged.iterrows():
             m_status = str(row.get('match_status', '')).strip().upper()
-            
             if m_status == 'FINISHED':
                 h_s = int(row['home_score'])
                 a_s = int(row['away_score'])
                 outcome = "DRAW"
                 if h_s > a_s: outcome = "HOME"
                 elif a_s > h_s: outcome = "AWAY"
-                
                 bet_pick = str(row['pick']).strip().upper()
                 final_res = 'WIN' if bet_pick == outcome else 'LOSE'
-                
                 stake = float(row['stake']) if row['stake'] else 0
                 odds = float(row['odds']) if row['odds'] else 1.0
                 payout = int(stake * odds) if final_res == 'WIN' else 0
                 net = int(payout - stake)
-                
                 curr_res = str(row.get('result', '')).strip().upper()
                 curr_net = float(row.get('net', 0)) if pd.notna(row.get('net')) else 0
-                
                 if curr_res != final_res or int(curr_net) != net:
-                    supabase.table("bets").update({
-                        "result": final_res,
-                        "payout": payout,
-                        "net": net
-                    }).eq("key", row['key']).execute()
+                    supabase.table("bets").update({"result": final_res, "payout": payout, "net": net}).eq("key", row['key']).execute()
                     updates_count += 1
-                
         return updates_count, f"GW {min(target_gws)} to {max(target_gws)}"
     except Exception as e:
         print(f"Settlement Error: {e}")
         return 0, str(e)
+
+# --- AI CALCULATION ---
+def calculate_ai_prediction(match_row, odds_df):
+    mid = match_row['match_id']
+    o_row = odds_df[odds_df['match_id'] == mid]
+    if not o_row.empty:
+        h = float(o_row.iloc[0]['home_win'])
+        d = float(o_row.iloc[0]['draw'])
+        a = float(o_row.iloc[0]['away_win'])
+        if h > 0 and d > 0 and a > 0:
+            ip_h = 1/h; ip_d = 1/d; ip_a = 1/a
+            total_ip = ip_h + ip_d + ip_a
+            p_h = (ip_h / total_ip) * 100
+            p_a = (ip_a / total_ip) * 100
+            p_d = (ip_d / total_ip) * 100
+            if p_h > p_a and p_h > p_d: return "HOME", int(p_h)
+            elif p_a > p_h and p_a > p_d: return "AWAY", int(p_a)
+            else: return "DRAW", int(p_d)
+    return None, 0
 
 def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
     if users_df.empty: return {}, {}
@@ -275,24 +270,18 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
         for _, r in bm_log_df.iterrows():
             nums = "".join([c for c in str(r['gw']) if c.isdigit()])
             if nums: bm_map[f"GW{nums}"] = r['bookmaker']
-
     if bets_df.empty: return stats, bm_map
-
     results_safe = results_df.rename(columns={'status': 'match_status'})
     merged = pd.merge(bets_df, results_safe[['match_id', 'match_status', 'home_score', 'away_score']], on='match_id', how='left')
-
     for _, b in merged.iterrows():
         user = b['user']
         if user not in stats: continue
-        
         db_res = str(b.get('result', '')).strip().upper()
         db_net = float(b['net']) if pd.notna(b['net']) and str(b['net']).strip() != '' else 0
         stake = float(b['stake']) if b['stake'] else 0
         odds = float(b['odds']) if b['odds'] else 1.0
-        
         gw_key = f"GW{''.join([c for c in str(b['gw']) if c.isdigit()])}"
         bm = bm_map.get(gw_key)
-        
         if db_res in ['WIN', 'LOSE']:
             stats[user]['total'] += 1
             stats[user]['balance'] += int(db_net)
@@ -300,7 +289,6 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
             if bm and bm in stats and bm != user: stats[bm]['balance'] -= int(db_net)
         else:
             stats[user]['potential'] += int((stake * odds) - stake)
-
     return stats, bm_map
 
 def calculate_profitable_clubs_fixed(bets_df, results_df):
@@ -328,31 +316,23 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
     gw_total_pnl = {u: 0 for u in users_df['username'].unique()} 
     dream_profit = {u: 0 for u in users_df['username'].unique()}
     inplay_sim_only = {u: 0 for u in users_df['username'].unique()}
-
     gw_bets = bets_df[bets_df['gw'] == target_gw].copy() if not bets_df.empty else pd.DataFrame()
-    
     if not gw_bets.empty:
         results_safe = results_df.rename(columns={'status': 'match_status'})
         gw_bets = pd.merge(gw_bets, results_safe[['match_id', 'match_status', 'home_score', 'away_score']], on='match_id', how='left')
         current_bm = bm_map.get(target_gw)
-
         for _, b in gw_bets.iterrows():
             user = b['user']
             if user not in base_stats: continue
-            
             db_res = str(b.get('result', '')).strip().upper()
             db_net = float(b['net']) if pd.notna(b['net']) and str(b['net']).strip() != '' else 0
-            
             stake = float(b['stake'])
             odds = float(b['odds'])
             pot_win = (stake * odds) - stake
             dream_profit[user] += int(pot_win)
-            
             pnl = 0
             is_inplay = False
-            
-            if db_res in ['WIN', 'LOSE']:
-                pnl = db_net
+            if db_res in ['WIN', 'LOSE']: pnl = db_net
             else:
                 status = str(b.get('match_status', 'SCHEDULED')).strip().upper()
                 if status not in ['SCHEDULED', 'TIMED', 'POSTPONED', 'FINISHED']:
@@ -364,16 +344,13 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
                     if b['pick'] == curr_outcome: pnl = pot_win
                     else: pnl = -stake
                     is_inplay = True
-            
             gw_total_pnl[user] += int(pnl)
             if current_bm and current_bm in gw_total_pnl and current_bm != user:
                 gw_total_pnl[current_bm] -= int(pnl)
-            
             if is_inplay:
                 inplay_sim_only[user] += int(pnl)
                 if current_bm and current_bm in inplay_sim_only and current_bm != user:
                     inplay_sim_only[current_bm] -= int(pnl)
-
     live_data = []
     for u, s in base_stats.items():
         total_val = s['balance'] + inplay_sim_only.get(u, 0)
@@ -381,11 +358,11 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
         live_data.append({'User': u, 'Total': total_val, 'Diff': diff_val, 'Dream': dream_profit.get(u, 0)})
     return pd.DataFrame(live_data).sort_values('Total', ascending=False)
 
-def get_strict_target_gw(results_df):
+def get_strict_target_gw(results_df, target_season):
     if results_df.empty: return "GW1"
     now_jst = datetime.datetime.now(JST)
     if 'dt_jst' not in results_df.columns: results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
-    season_start = pd.Timestamp("2025-07-01", tz=JST)
+    season_start = pd.Timestamp(f"{target_season}-07-01", tz=JST)
     current_season = results_df[results_df['dt_jst'] >= season_start]
     if current_season.empty: return "GW1"
     future = current_season[current_season['dt_jst'] > (now_jst - timedelta(hours=4))].sort_values('dt_jst')
@@ -421,9 +398,10 @@ def check_and_assign_bm(target_gw, bm_log_df, users_df):
     supabase.table("bm_log").upsert({"gw": target_gw, "bookmaker": new_bm}).execute()
     return new_bm
 
-def sync_api(api_token):
+# --- CLEAN SYNC LOGIC ---
+def sync_api(api_token, season):
     if not api_token: return False
-    url = "https://api.football-data.org/v4/competitions/PL/matches?season=2025"
+    url = f"https://api.football-data.org/v4/competitions/PL/matches?season={season}"
     headers = {'X-Auth-Token': api_token}
     try:
         r = requests.get(url, headers=headers)
@@ -444,19 +422,14 @@ def sync_api(api_token):
         return True
     except: return False
 
-def determine_bet_outcome(bet_row, match_row):
-    db_res = str(bet_row.get('result', '')).strip().upper()
-    if db_res in ['WIN', 'LOSE']: return db_res
-    status = str(match_row.get('match_status', 'SCHEDULED')).strip().upper()
-    if status == 'FINISHED':
-        h_s = int(match_row['home_score']) if pd.notna(match_row['home_score']) else 0
-        a_s = int(match_row['away_score']) if pd.notna(match_row['away_score']) else 0
-        outcome = "DRAW"
-        if h_s > a_s: outcome = "HOME"
-        elif a_s > h_s: outcome = "AWAY"
-        user_pick = str(bet_row['pick']).strip().upper()
-        return 'WIN' if user_pick == outcome else 'LOSE'
-    return 'OPEN'
+def clean_old_data(season):
+    """V8.2: Delete data older than target season start to fix pollution."""
+    try:
+        season_start = f"{season}-07-01T00:00:00Z"
+        # Delete matches where utc_kickoff < season_start
+        supabase.table("result").delete().lt("utc_kickoff", season_start).execute()
+        return True
+    except: return False
 
 # ==============================================================================
 # 3. Main Application
@@ -464,21 +437,18 @@ def determine_bet_outcome(bet_row, match_row):
 def main():
     if not supabase: st.error("DB Error"); st.stop()
     
-    # --- 1. SYNC & FORCE SETTLE ---
     res_conf = supabase.table("config").select("*").execute()
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
-
-    if 'v593_api_synced' not in st.session_state:
-        with st.spinner("Syncing API & Auto-Settling (Date-Aware)..."): 
-            sync_api(token)
-            st.session_state['v593_api_synced'] = True
     
-    count, scope_desc = settle_bets_date_aware()
-    if count > 0:
-        st.toast(f"✅ Settled {count} bets ({scope_desc})", icon="💰")
+    target_season = get_config_value(config, "API_FOOTBALL_SEASON", 2024)
 
-    # --- 2. FETCH LATEST DATA ---
+    if 'v83_api_synced' not in st.session_state:
+        with st.spinner(f"Syncing Schedule ({target_season}) & Auto-Settling..."): 
+            sync_api(token, target_season)
+            settle_bets_date_aware()
+            st.session_state['v83_api_synced'] = True
+    
     bets, odds, results, bm_log, users, config = fetch_all_data()
     if users.empty: st.warning("User data missing."); st.stop()
 
@@ -500,8 +470,8 @@ def main():
 
     me = st.session_state['user']
     role = st.session_state.get('role', 'user')
-
-    target_gw = get_strict_target_gw(results)
+    
+    target_gw = get_strict_target_gw(results, target_season)
     check_and_assign_bm(target_gw, bm_log, users)
     
     bm_log_refresh = supabase.table("bm_log").select("*").execute()
@@ -513,7 +483,6 @@ def main():
     current_bm = bm_map.get(f"GW{nums}", "Undecided")
     is_bm = (me == current_bm)
     lock_mins = get_config_value(config, "lock_minutes_before_earliest", 60)
-    gw_locked = False
     
     budget_limit = get_config_value(config, "max_total_stake_per_gw", 20000)
     current_spend = 0
@@ -532,7 +501,7 @@ def main():
 
     t1, t2, t3, t4, t5 = st.tabs(["MATCHES", "LIVE", "HISTORY", "DASHBOARD", "ADMIN"])
 
-    # --- TAB 1: MATCHES ---
+    # --- TAB 1: MATCHES (V8.2: V7.2+AI+Lock) ---
     with t1:
         c_h1, c_h2 = st.columns([3, 1])
         c_h1.markdown(f"### {target_gw}")
@@ -546,26 +515,21 @@ def main():
             matches = results[results['gw'] == target_gw].copy()
             if not matches.empty:
                 matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
-                matches = matches[matches['dt_jst'] >= pd.Timestamp("2025-07-01", tz=JST)].sort_values('dt_jst')
+                matches = matches[matches['dt_jst'] >= pd.Timestamp(f"{target_season}-07-01", tz=JST)].sort_values('dt_jst')
                 
-                if not matches.empty:
-                    first_ko = matches.iloc[0]['dt_jst']
-                    lock_time = first_ko - timedelta(minutes=lock_mins)
-                    if datetime.datetime.now(JST) >= lock_time:
-                        gw_locked = True
-                        st.info(f"🔒 LOCKED (Starts: {first_ko.strftime('%H:%M')})")
-
                 for _, m in matches.iterrows():
                     mid = m['match_id']
                     dt_str = m['dt_jst'].strftime('%m/%d %H:%M')
+                    
+                    is_locked = is_match_locked(m['utc_kickoff'], lock_mins)
                     
                     o_row = odds[odds['match_id'] == mid]
                     oh = o_row.iloc[0]['home_win'] if not o_row.empty else 0
                     od = o_row.iloc[0]['draw'] if not o_row.empty else 0
                     oa = o_row.iloc[0]['away_win'] if not o_row.empty else 0
                     
-                    form_h = get_recent_form_html(m['home'], results, m['dt_jst'])
-                    form_a = get_recent_form_html(m['away'], results, m['dt_jst'])
+                    form_h = get_recent_form_html(m['home'], results, m['dt_jst'], target_season)
+                    form_a = get_recent_form_html(m['away'], results, m['dt_jst'], target_season)
                     
                     match_bets = bets[bets['match_id'] == mid] if not bets.empty else pd.DataFrame()
                     my_bet = match_bets[match_bets['user'] == me] if not match_bets.empty else pd.DataFrame()
@@ -576,31 +540,33 @@ def main():
 
                     card_html = f"""<div class="app-card-top"><div class="card-header"><span>⏱ {dt_str}</span><span>{m['status']}</span></div><div class="matchup-flex"><div class="team-col"><span class="team-name">{m['home']}</span>{form_h}</div><div class="score-col"><span class="score-box">{score_disp}</span></div><div class="team-col"><span class="team-name">{m['away']}</span>{form_a}</div></div><div class="info-row"><div class="odds-label">HOME <span class="odds-value">{oh if oh else '-'}</span></div><div class="odds-label">DRAW <span class="odds-value">{od if od else '-'}</span></div><div class="odds-label">AWAY <span class="odds-value">{oa if oa else '-'}</span></div></div>"""
                     
+                    badges = ""
+                    ai_pick, ai_conf = calculate_ai_prediction(m, odds)
+                    if ai_pick:
+                        badges += f"""<div class="bet-badge ai"><span>🤖 AI:</span><span class="bb-pick">{ai_pick}</span> ({ai_conf}%)</div>"""
                     if not match_bets.empty:
-                        badges = ""
                         for _, b in match_bets.iterrows():
                             me_cls = "me" if b['user'] == me else ""
                             pick_txt = b['pick'][:4]
                             pnl_span = ""
-                            
                             db_res = str(b.get('result', '')).strip().upper()
                             db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
-                            
                             if db_res == 'WIN': pnl_span = f"<span class='bb-res-win'>+¥{int(db_net):,}</span>"
                             elif db_res == 'LOSE': pnl_span = f"<span class='bb-res-lose'>-¥{int(abs(db_net)):,}</span>"
-                            
                             badges += f"""<div class="bet-badge {me_cls}"><span>{b['user']}:</span><span class="bb-pick">{pick_txt}</span> (¥{int(b['stake']):,}){pnl_span}</div>"""
-                        card_html += f"""<div class="social-bets-container">{badges}</div>"""
+                    if badges: card_html += f"""<div class="social-bets-container">{badges}</div>"""
                     card_html += "</div>"
                     st.markdown(card_html, unsafe_allow_html=True)
 
-                    is_open = m['status'] not in ['IN_PLAY', 'FINISHED', 'PAUSED'] and oh > 0 and not gw_locked
-                    if not is_open:
+                    is_finished = m['status'] in ['IN_PLAY', 'FINISHED', 'PAUSED']
+                    
+                    if is_finished or is_locked:
                         msg = "CLOSED"
-                        if oh == 0: msg = "WAITING ODDS"
-                        elif gw_locked: msg = "LOCKED"
+                        if is_locked and not is_finished: msg = "🔒 LOCKED"
                         st.markdown(f"<div class='status-msg'>{msg}</div><div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
                     elif is_bm: st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
+                    elif oh == 0:
+                        st.markdown(f"<div class='status-msg'>WAITING ODDS</div><div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
                     else:
                         with st.form(key=f"bf_{mid}"):
                             c_p, c_s, c_b = st.columns([3, 2, 2])
@@ -614,17 +580,23 @@ def main():
                                 if over_budget: st.error(f"Over Budget! Limit: ¥{budget_limit:,}")
                                 else:
                                     to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
-                                    pl = {"key": f"{m['gw']}:{me}:{mid}", "gw": m['gw'], "user": me, "match_id": int(mid), "match": f"{m['home']} vs {m['away']}", "pick": pick, "stake": stake, "odds": to, "placed_at": datetime.datetime.now(JST).isoformat(), "status": "OPEN", "result": "", "payout": 0, "net": 0}
+                                    pl = {
+                                        "key": f"{m['gw']}:{me}:{mid}", "gw": m['gw'], "user": me, 
+                                        "match_id": int(mid), "match": f"{m['home']} vs {m['away']}", 
+                                        "pick": pick, "stake": stake, "odds": to, 
+                                        "placed_at": datetime.datetime.now(JST).isoformat(), 
+                                        "status": "OPEN", "result": "", "payout": 0, "net": 0
+                                    }
                                     supabase.table("bets").upsert(pl).execute()
-                                    st.toast("Saved!", icon="✅"); time.sleep(1); st.rerun()
+                                    st.toast(f"Bet Placed @ {to}", icon="✅"); time.sleep(1); st.rerun()
             else: st.info(f"No matches for {target_gw}")
         else: st.info("Loading...")
 
-    # --- TAB 2: LIVE ---
+    # --- TAB 2: LIVE (V8.2: Rich Scoreboard) ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH & SMART SETTLE", use_container_width=True): 
-            sync_api(token)
+            sync_api(token, target_season)
             settle_bets_date_aware()
             st.rerun()
         
@@ -651,67 +623,70 @@ def main():
                 if m['status'] in ['IN_PLAY', 'PAUSED']: sts_disp = f"<span class='live-dot'>●</span> {m['status']}"
                 mb = bets[bets['match_id'] == m['match_id']] if not bets.empty else pd.DataFrame()
                 stake_str = ""
+                
                 if not mb.empty:
-                    parts = []
-                    for _, b in mb.iterrows(): parts.append(f"{b['user']}:{b['pick'][0]}")
-                    stake_str = " ".join(parts)
-                st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05)"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><span>{sts_disp}</span><span>{stake_str}</span></div></div>""", unsafe_allow_html=True)
+                    badges_html = []
+                    for _, b in mb.iterrows():
+                        u_name = b['user']
+                        pick = b['pick']
+                        stake = int(b['stake'])
+                        pnl_display = ""
+                        pnl_col = "#aaa"
+                        db_res = str(b.get('result', '')).strip().upper()
+                        db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
+                        if db_res in ['WIN', 'LOSE']:
+                            sign = "+" if db_net > 0 else ""
+                            pnl_col = "#4ade80" if db_net > 0 else "#f87171"
+                            pnl_display = f"→ <span style='color:{pnl_col}'>{sign}¥{int(db_net):,}</span>"
+                        elif m['status'] in ['IN_PLAY', 'PAUSED']:
+                            h_s = int(m['home_score']) if pd.notna(m['home_score']) else 0
+                            a_s = int(m['away_score']) if pd.notna(m['away_score']) else 0
+                            curr = "DRAW"
+                            if h_s > a_s: curr = "HOME"
+                            elif a_s > h_s: curr = "AWAY"
+                            is_winning = (pick == curr)
+                            pot_net = (stake * float(b['odds'])) - stake if is_winning else -stake
+                            sign = "+" if pot_net > 0 else ""
+                            pnl_col = "#4ade80" if pot_net > 0 else "#f87171"
+                            pnl_display = f"→ <span style='color:{pnl_col}'>{sign}¥{int(pot_net):,}</span>"
+                        else:
+                            pot_win = (stake * float(b['odds'])) - stake
+                            pnl_display = f"→ <span style='color:#666; font-size:0.7rem'>+¥{int(pot_win):,}?</span>"
+                        badges_html.append(f"<div><span style='font-weight:bold'>{u_name}:</span> {pick} <span style='font-family:monospace; opacity:0.7'>(¥{stake:,})</span> {pnl_display}</div>")
+                    stake_str = "<div style='display:flex; flex-direction:column; align-items:flex-end; font-size:0.75rem; gap:2px;'>" + "".join(badges_html) + "</div>"
+                
+                st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05);"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><div style='display:flex; align-items:center'>{sts_disp}</div>{stake_str}</div></div>""", unsafe_allow_html=True)
 
-    # --- TAB 3: HISTORY ---
+    # --- TAB 3: HISTORY (V5.9.3 Restored) ---
     with t3:
         if not bets.empty:
             c1, c2 = st.columns(2)
-            
-            # --- V5.9.3: Default & Constraints ---
             all_gws = sorted(list(bets['gw'].unique()), key=lambda x: int("".join([c for c in str(x) if c.isdigit()] or 0)), reverse=True)
-            
-            # Default indices
-            def_u_idx = 0 # 'All' is first
+            def_u_idx = 0 
             def_g_idx = 0 
-            if target_gw in all_gws:
-                def_g_idx = all_gws.index(target_gw)
-            
-            # User Selector
+            if target_gw in all_gws: def_g_idx = all_gws.index(target_gw)
             sel_u = c1.selectbox("User", ["All"] + list(users['username'].unique()), index=def_u_idx)
-            
-            # GW Selector Logic (Constraint)
-            if sel_u == "All":
-                # Remove "All" option if User is "All"
-                gw_opts = all_gws
+            if sel_u == "All": gw_opts = all_gws
             else:
                 gw_opts = ["All"] + all_gws
-                # Adjust default index because "All" was added at 0
-                if target_gw in all_gws:
-                    def_g_idx = all_gws.index(target_gw) + 1
-            
-            # Safe index handling
+                if target_gw in all_gws: def_g_idx = all_gws.index(target_gw) + 1
             if def_g_idx >= len(gw_opts): def_g_idx = 0
-            
             sel_g = c2.selectbox("GW", gw_opts, index=def_g_idx)
-            
-            # Filtering
             hist = bets.copy()
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
-            
-            # Safe Merge (Deduplicated Result)
-            results_dedup = results.drop_duplicates(subset=['match_id']).rename(columns={'status': 'match_status'})
-            hist = pd.merge(hist, results_dedup[['match_id', 'home', 'away', 'match_status']], on='match_id', how='left')
+            results_safe = results.rename(columns={'status': 'match_status'})
+            hist = pd.merge(hist, results_safe[['match_id', 'home', 'away', 'match_status']], on='match_id', how='left')
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
-            
-            # Summary
             if not hist.empty:
                 total_net = hist['net'].sum()
-                
                 if sel_u != "All":
                     col_str = "#4ade80" if total_net >= 0 else "#f87171"
                     sign = "+" if total_net >= 0 else ""
                     st.markdown(f"""<div class="summary-box"><div class="summary-title">{sel_u} / {sel_g}</div><div class="summary-val" style="color:{col_str}">{sign}¥{int(total_net):,}</div></div>""", unsafe_allow_html=True)
                 else:
-                    user_sums = hist.groupby('user')['net'].sum().reset_index()
-                    user_sums = user_sums.sort_values('net', ascending=False)
-                    
+                    user_sums = hist.groupby('user')['net'].sum().reset_index().sort_values('net', ascending=False)
                     html_list = ['<div class="summary-list">']
                     for _, r in user_sums.iterrows():
                         u_net = r['net']
@@ -720,30 +695,21 @@ def main():
                         html_list.append(f"""<div class="summary-row"><div class="s-user">{r['user']}</div><div class="s-amt" style="color:{u_col}">{u_sign}¥{int(u_net):,}</div></div>""")
                     html_list.append('</div>')
                     st.markdown("".join(html_list), unsafe_allow_html=True)
-            
             st.markdown("---") 
-            
             for _, b in hist.iterrows():
                 db_res = str(b.get('result', '')).strip().upper()
                 if db_res not in ['WIN', 'LOSE']: db_res = 'PENDING'
-                
                 db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
-                
                 cls = "h-win" if db_res == 'WIN' else ("h-lose" if db_res == 'LOSE' else "")
                 pnl = "PENDING"
                 col = "#aaa"
-                if db_res == 'WIN':
-                    pnl = f"+¥{int(db_net):,}"
-                    col = "#4ade80"
-                elif db_res == 'LOSE':
-                    pnl = f"-¥{int(abs(db_net)):,}"
-                    col = "#f87171"
-                
+                if db_res == 'WIN': pnl, col = f"+¥{int(db_net):,}", "#4ade80"
+                elif db_res == 'LOSE': pnl, col = f"-¥{int(abs(db_net)):,}", "#f87171"
                 match_name = f"{b['home']} vs {b['away']}" if pd.notna(b['home']) else b.get('match', 'Unknown')
                 st.markdown(f"""<div class="hist-card {cls}"><div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace"><span>{b['user']} | {b['gw']}</span><span style="color:{col}; font-weight:bold;">{pnl}</span></div><div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div><div style="font-size:0.8rem; opacity:0.8"><span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> <span style="opacity:0.6">(@{b['odds']})</span><span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span></div></div>""", unsafe_allow_html=True)
         else: st.info("No history.")
 
-    # --- TAB 4: DASHBOARD ---
+    # --- TAB 4: DASHBOARD (V5.9.3 Restored) ---
     with t4:
         st.markdown("### 🏆 DASHBOARD")
         my_s = stats.get(me, {'balance':0, 'wins':0, 'total':0})
@@ -752,7 +718,6 @@ def main():
         with c1: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>WIN RATE</div><div class='kpi-val'>{win_rate:.1f}%</div></div>", unsafe_allow_html=True)
         with c2: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>PROFIT</div><div class='kpi-val'>¥{my_s['balance']:,}</div></div>", unsafe_allow_html=True)
         with c3: st.markdown(f"<div class='kpi-box'><div class='kpi-label'>GW</div><div class='kpi-val'>{target_gw}</div></div>", unsafe_allow_html=True)
-        
         st.markdown("---")
         st.markdown("#### 💰 PROFITABLE CLUBS")
         prof_data = calculate_profitable_clubs_fixed(bets, results)
@@ -764,8 +729,6 @@ def main():
                     if clubs:
                         for j, (team, amt) in enumerate(clubs): st.markdown(f"<div class='rank-list-item'><span class='rank-pos'>{j+1}.</span> <span style='flex:1'>{team}</span> <span class='prof-amt'>+¥{amt:,}</span></div>", unsafe_allow_html=True)
                     else: st.caption("No wins yet.")
-        else: st.info("No data.")
-
         st.markdown("---")
         st.markdown("#### ⚖️ BM STATS")
         if not bm_log.empty:
@@ -773,32 +736,44 @@ def main():
             bm_counts.columns = ['User', 'Count']
             for _, r in bm_counts.iterrows(): st.markdown(f"<div class='rank-list-item'><span style='flex:1'>{r['User']}</span> <span style='font-weight:bold'>{r['Count']} times</span></div>", unsafe_allow_html=True)
 
-    # --- TAB 5: ADMIN ---
     with t5:
         if role == 'admin':
-            st.markdown("#### SYSTEM HEALTH (SMART SCOPE)")
-            # Fix Health Check KeyError
+            st.markdown("<div class='admin-section'><div class='admin-header'>⚙️ CONFIG MANAGER</div>", unsafe_allow_html=True)
+            c_cfg1, c_cfg2 = st.columns([3, 1])
+            curr_s = get_config_value(config, "API_FOOTBALL_SEASON", 2024)
+            new_s = c_cfg1.number_input("API Season", 2023, 2030, int(curr_s))
+            if c_cfg2.button("💾 SAVE CONFIG", use_container_width=True):
+                supabase.table("config").upsert({"key": "API_FOOTBALL_SEASON", "value": str(new_s)}).execute()
+                st.success("Saved!"); time.sleep(1); st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            st.markdown("#### SYSTEM HEALTH")
             unsettled_q = 0
             if not bets.empty and not results.empty:
                 results_safe = results.rename(columns={'status': 'match_status'})
                 merged = pd.merge(bets, results_safe, on='match_id', how='inner')
                 unsettled_q = len(merged[(pd.isna(merged['net']) | (merged['net'] == 0)) & (merged['match_status'] == 'FINISHED')])
-            
             c1, c2 = st.columns(2)
             c1.metric("Total Bets", len(bets))
             c2.metric("Unsettled Finished", unsettled_q)
-            
-            if st.button("🚨 FORCE SCOPED SETTLE", type="primary"):
+            if st.button("🚨 FORCE SCOPED SETTLE", type="secondary"):
                 count, scope_desc = settle_bets_date_aware()
                 st.success(f"Settled {count} bets ({scope_desc})! Reloading..."); time.sleep(1); st.rerun()
-
-            st.markdown("#### ODDS EDITOR")
+            
+            if st.button(f"🔄 FORCE RESYNC (SEASON {target_season})", type="primary", use_container_width=True):
+                with st.spinner("Cleaning old data & Resyncing..."):
+                    clean_old_data(target_season)
+                    sync_api(token, target_season)
+                    st.success("Database Repaired & Synced!"); time.sleep(1); st.rerun()
+            
+            st.write("---")
+            st.markdown("#### ODDS EDITOR (Manual)")
             with st.expander("📝 Update Odds", expanded=True):
                 if not results.empty:
                     matches = results[results['gw'] == target_gw].copy()
                     if not matches.empty:
                         matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
-                        matches = matches[matches['dt_jst'] >= pd.Timestamp("2025-07-01", tz=JST)].sort_values('dt_jst')
+                        matches = matches[matches['dt_jst'] >= pd.Timestamp(f"{target_season}-07-01", tz=JST)].sort_values('dt_jst')
                         m_opts = {f"{m['home']} vs {m['away']}": m['match_id'] for _, m in matches.iterrows()}
                         sel_m_name = st.selectbox("Match", list(m_opts.keys()))
                         sel_m_id = m_opts[sel_m_name]
@@ -813,7 +788,6 @@ def main():
                         if st.button("SAVE ODDS", use_container_width=True):
                             supabase.table("odds").upsert({"match_id": int(sel_m_id), "home_win": new_h, "draw": new_d, "away_win": new_a}).execute()
                             st.success("Updated"); time.sleep(1); st.rerun()
-                    else: st.warning("No matches.")
             with st.expander("👑 BM Manual Override"):
                  with st.form("bm_manual"):
                     t_gw = st.selectbox("GW", sorted(results['gw'].unique()) if not results.empty else ["GW1"])
