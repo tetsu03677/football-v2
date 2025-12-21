@@ -13,9 +13,8 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V6.6", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V6.7", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
-CURRENT_SEASON = 2024  # FIX: 2024-2025 Season
 
 st.markdown("""
 <style>
@@ -54,8 +53,9 @@ st.markdown("""
     .bet-badge.ai { border: 1px solid rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.15); color: #e9d5ff; }
     
     .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
-    .bb-res-win { color: #4ade80; font-weight: bold; margin-left: 4px; }
-    .bb-res-lose { color: #f87171; font-weight: bold; margin-left: 4px; }
+    .bb-res-win { color: #4ade80; font-weight: bold; font-family: monospace; }
+    .bb-res-lose { color: #f87171; font-weight: bold; font-family: monospace; }
+    .bb-res-pot { color: #fbbf24; font-weight: bold; font-family: monospace; opacity: 0.8; }
     
     /* Dashboard & Admin */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
@@ -155,7 +155,10 @@ def get_config_value(config_df, key, default):
     row = config_df[config_df['key'] == key]
     if not row.empty: 
         try: return int(row.iloc[0]['value'])
-        except: return row.iloc[0]['value']
+        except: 
+            # Allow string return if default is string
+            if isinstance(default, int): return default
+            return row.iloc[0]['value']
     return default
 
 def to_jst(iso_str):
@@ -166,11 +169,11 @@ def to_jst(iso_str):
         return dt.tz_convert(JST)
     except: return None
 
-def get_recent_form_html(team_name, results_df, current_kickoff_jst):
+def get_recent_form_html(team_name, results_df, current_kickoff_jst, target_season):
     if results_df.empty: return "-"
     if 'dt_jst' not in results_df.columns:
         results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
-    season_start = pd.Timestamp(f"{CURRENT_SEASON}-07-01", tz=JST) # Dynamic Season
+    season_start = pd.Timestamp(f"{target_season}-07-01", tz=JST)
     past = results_df[
         (results_df['dt_jst'] >= season_start) &
         (results_df['status'] == 'FINISHED') & 
@@ -252,7 +255,7 @@ def settle_bets_date_aware():
         print(f"Settlement Error: {e}")
         return 0, str(e)
 
-# --- AUTO ODDS SYNC (V6.6 Robust Match) ---
+# --- AUTO ODDS SYNC (V6.7 Config Driven) ---
 TEAM_NAME_MAP = {
     "wolves": "wolverhampton",
     "spurs": "tottenham",
@@ -271,20 +274,12 @@ TEAM_NAME_MAP = {
 def normalize_name(name):
     if not name: return ""
     name = name.lower()
-    # Remove common suffixes
     name = name.replace("fc", "").replace("football club", "").replace("afc", "").replace("hotspur", "")
-    # Remove all non-alpha
-    clean = re.sub(r'[^a-z]', '', name)
-    # Check manual map (check if key is IN the name)
-    for key, val in TEAM_NAME_MAP.items():
-        if key.replace(" ","") in clean: 
-            return val
-    return clean
+    return re.sub(r'[^a-z]', '', name)
 
-def sync_odds_rapidapi(results_df, rapidapi_key, force_limit=None):
+def sync_odds_rapidapi(results_df, rapidapi_key, season, force_limit=None):
     if not rapidapi_key or results_df.empty: return 0, "No key or data"
     
-    # Target: Future matches (SCHEDULED or TIMED)
     targets = results_df[results_df['status'].isin(['SCHEDULED', 'TIMED'])].copy()
     if targets.empty: return 0, "No future matches"
     
@@ -303,8 +298,8 @@ def sync_odds_rapidapi(results_df, rapidapi_key, force_limit=None):
     for _, row in targets.iterrows():
         try:
             date_str = pd.to_datetime(row['utc_kickoff']).strftime('%Y-%m-%d')
-            # V6.6 FIX: SEASON 2024
-            url = f"{base_url}/fixtures?date={date_str}&league=39&season={CURRENT_SEASON}"
+            # V6.7: Use Config Driven Season
+            url = f"{base_url}/fixtures?date={date_str}&league=39&season={season}"
             r = requests.get(url, headers=headers_direct)
             
             if r.status_code == 200:
@@ -314,7 +309,6 @@ def sync_odds_rapidapi(results_df, rapidapi_key, force_limit=None):
                 found_fixture_id = None
                 for f in data:
                     api_home_norm = normalize_name(f['teams']['home']['name'])
-                    # Fuzzy match: mutual containment
                     if my_home_norm in api_home_norm or api_home_norm in my_home_norm:
                         found_fixture_id = f['fixture']['id']
                         break
@@ -326,7 +320,6 @@ def sync_odds_rapidapi(results_df, rapidapi_key, force_limit=None):
                         o_data = r_odds.json().get('response', [])
                         if o_data:
                             bookmakers = o_data[0]['bookmakers']
-                            # Try find Bet365(8), Unibet(6), WilliamHill(10), Bwin(1)
                             selected_bm = None
                             preferred_ids = [8, 6, 10, 1] 
                             for pid in preferred_ids:
@@ -343,7 +336,6 @@ def sync_odds_rapidapi(results_df, rapidapi_key, force_limit=None):
                                 h = vals.get('Home')
                                 d = vals.get('Draw')
                                 a = vals.get('Away')
-                                
                                 if h and d and a:
                                     supabase.table("odds").upsert({
                                         "match_id": int(row['match_id']),
@@ -359,7 +351,6 @@ def sync_odds_rapidapi(results_df, rapidapi_key, force_limit=None):
         except Exception as e:
             logs.append(f"Err: {e}")
             continue
-            
     return synced_count, logs
 
 def calculate_ai_prediction(match_row, odds_df):
@@ -480,7 +471,7 @@ def get_strict_target_gw(results_df):
     if results_df.empty: return "GW1"
     now_jst = datetime.datetime.now(JST)
     if 'dt_jst' not in results_df.columns: results_df['dt_jst'] = results_df['utc_kickoff'].apply(to_jst)
-    season_start = pd.Timestamp(f"{CURRENT_SEASON}-07-01", tz=JST)
+    season_start = pd.Timestamp("2024-07-01", tz=JST) # Keep static for GW filtering is fine
     current_season = results_df[results_df['dt_jst'] >= season_start]
     if current_season.empty: return "GW1"
     future = current_season[current_season['dt_jst'] > (now_jst - timedelta(hours=4))].sort_values('dt_jst')
@@ -516,9 +507,9 @@ def check_and_assign_bm(target_gw, bm_log_df, users_df):
     supabase.table("bm_log").upsert({"gw": target_gw, "bookmaker": new_bm}).execute()
     return new_bm
 
-def sync_api(api_token):
+def sync_api(api_token, season):
     if not api_token: return False
-    url = "https://api.football-data.org/v4/competitions/PL/matches?season=2025" # Keep this as per original
+    url = f"https://api.football-data.org/v4/competitions/PL/matches?season={season}"
     headers = {'X-Auth-Token': api_token}
     try:
         r = requests.get(url, headers=headers)
@@ -549,12 +540,15 @@ def main():
     config = pd.DataFrame(res_conf.data) if res_conf.data else pd.DataFrame(columns=['key','value'])
     token = get_api_token(config)
     rapid_key = get_rapidapi_key()
+    
+    # V6.7: Get Season from Config
+    target_season = get_config_value(config, "API_FOOTBALL_SEASON", 2024)
 
-    if 'v66_api_synced' not in st.session_state:
-        with st.spinner("Syncing Schedule & Auto-Settling..."): 
-            sync_api(token)
+    if 'v67_api_synced' not in st.session_state:
+        with st.spinner(f"Syncing Schedule ({target_season}) & Auto-Settling..."): 
+            sync_api(token, target_season)
             settle_bets_date_aware()
-            st.session_state['v66_api_synced'] = True
+            st.session_state['v67_api_synced'] = True
     
     # --- 2. FETCH LATEST DATA ---
     bets, odds, results, bm_log, users, config = fetch_all_data()
@@ -579,13 +573,15 @@ def main():
     me = st.session_state['user']
     role = st.session_state.get('role', 'user')
     
-    # --- V6.6: ADMIN AUTO ODDS SYNC (Robust) ---
-    if role == 'admin' and rapid_key and 'v66_odds_synced' not in st.session_state:
-        n_sync, _ = sync_odds_rapidapi(results, rapid_key, force_limit=10)
-        if n_sync > 0: st.toast(f"⚡ Auto-Update: {n_sync} matches synced!", icon="✅")
-        else: st.toast("⚡ Odds Checked: Up to date", icon="✅")
+    # --- V6.7: ADMIN AUTO ODDS SYNC (With Config Season & Feedback) ---
+    if role == 'admin' and rapid_key and 'v67_odds_synced' not in st.session_state:
+        n_sync, _ = sync_odds_rapidapi(results, rapid_key, target_season, force_limit=10)
+        if n_sync > 0: 
+            st.toast(f"⚡ Auto-Update: {n_sync} matches odds updated! (Season: {target_season})", icon="✅")
+        else:
+            st.toast(f"⚡ Odds Checked: Up to date (Season: {target_season})", icon="✅")
         
-        st.session_state['v66_odds_synced'] = True
+        st.session_state['v67_odds_synced'] = True
         odds = supabase.table("odds").select("*").execute()
         odds = pd.DataFrame(odds.data) if odds.data else pd.DataFrame(columns=['match_id','home_win','draw','away_win'])
         odds['match_id'] = pd.to_numeric(odds['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
@@ -634,7 +630,7 @@ def main():
             matches = results[results['gw'] == target_gw].copy()
             if not matches.empty:
                 matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
-                matches = matches[matches['dt_jst'] >= pd.Timestamp(f"{CURRENT_SEASON}-07-01", tz=JST)].sort_values('dt_jst')
+                matches = matches[matches['dt_jst'] >= pd.Timestamp(f"{target_season}-07-01", tz=JST)].sort_values('dt_jst')
                 
                 for _, m in matches.iterrows():
                     mid = m['match_id']
@@ -647,8 +643,8 @@ def main():
                     od = o_row.iloc[0]['draw'] if not o_row.empty else 0
                     oa = o_row.iloc[0]['away_win'] if not o_row.empty else 0
                     
-                    form_h = get_recent_form_html(m['home'], results, m['dt_jst'])
-                    form_a = get_recent_form_html(m['away'], results, m['dt_jst'])
+                    form_h = get_recent_form_html(m['home'], results, m['dt_jst'], target_season)
+                    form_a = get_recent_form_html(m['away'], results, m['dt_jst'], target_season)
                     
                     match_bets = bets[bets['match_id'] == mid] if not bets.empty else pd.DataFrame()
                     my_bet = match_bets[match_bets['user'] == me] if not match_bets.empty else pd.DataFrame()
@@ -715,7 +711,7 @@ def main():
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH & SMART SETTLE", use_container_width=True): 
-            sync_api(token)
+            sync_api(token, target_season)
             settle_bets_date_aware()
             st.rerun()
         
@@ -749,10 +745,13 @@ def main():
                         u_name = b['user']
                         pick = b['pick']
                         stake = int(b['stake'])
+                        
                         pnl_display = ""
                         pnl_col = "#aaa"
+                        
                         db_res = str(b.get('result', '')).strip().upper()
                         db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
+                        
                         if db_res in ['WIN', 'LOSE']:
                             sign = "+" if db_net > 0 else ""
                             pnl_col = "#4ade80" if db_net > 0 else "#f87171"
@@ -763,6 +762,7 @@ def main():
                             curr = "DRAW"
                             if h_s > a_s: curr = "HOME"
                             elif a_s > h_s: curr = "AWAY"
+                            
                             is_winning = (pick == curr)
                             pot_net = (stake * float(b['odds'])) - stake if is_winning else -stake
                             sign = "+" if pot_net > 0 else ""
@@ -771,7 +771,9 @@ def main():
                         else:
                             pot_win = (stake * float(b['odds'])) - stake
                             pnl_display = f"→ <span style='color:#666; font-size:0.7rem'>+¥{int(pot_win):,}?</span>"
+
                         badges_html.append(f"<div><span style='font-weight:bold'>{u_name}:</span> {pick} <span style='font-family:monospace; opacity:0.7'>(¥{stake:,})</span> {pnl_display}</div>")
+                    
                     stake_str = "<div style='display:flex; flex-direction:column; align-items:flex-end; font-size:0.75rem; gap:2px;'>" + "".join(badges_html) + "</div>"
                 
                 st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05);"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><div style='display:flex; align-items:center'>{sts_disp}</div>{stake_str}</div></div>""", unsafe_allow_html=True)
@@ -874,8 +876,8 @@ def main():
             if st.button("⚡ FORCE SYNC ODDS", type="secondary"):
                 if not rapid_key: st.error("No API-Football Key!")
                 else:
-                    synced_n, logs = sync_odds_rapidapi(results, rapid_key, force_limit=15)
-                    st.success(f"Odds Synced: {synced_n} matches")
+                    synced_n, logs = sync_odds_rapidapi(results, rapid_key, target_season, force_limit=15)
+                    st.success(f"Odds Synced: {synced_n} matches (Season: {target_season})")
                     with st.expander("Sync Logs"):
                         st.write(logs)
                     time.sleep(2); st.rerun()
@@ -885,7 +887,7 @@ def main():
                     matches = results[results['gw'] == target_gw].copy()
                     if not matches.empty:
                         matches['dt_jst'] = matches['utc_kickoff'].apply(to_jst)
-                        matches = matches[matches['dt_jst'] >= pd.Timestamp(f"{CURRENT_SEASON}-07-01", tz=JST)].sort_values('dt_jst')
+                        matches = matches[matches['dt_jst'] >= pd.Timestamp(f"{target_season}-07-01", tz=JST)].sort_values('dt_jst')
                         m_opts = {f"{m['home']} vs {m['away']}": m['match_id'] for _, m in matches.iterrows()}
                         sel_m_name = st.selectbox("Match", list(m_opts.keys()))
                         sel_m_id = m_opts[sel_m_name]
