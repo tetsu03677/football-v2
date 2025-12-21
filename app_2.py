@@ -13,19 +13,15 @@ from supabase import create_client
 # ==============================================================================
 # 0. System Configuration & CSS
 # ==============================================================================
-st.set_page_config(page_title="Football App V6.1", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V6.2", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
 <style>
     /* Layout & Base */
     .block-container { padding-top: 4.5rem; padding-bottom: 6rem; max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
-    
-    /* Cards */
     .app-card-top { border: 1px solid rgba(255,255,255,0.1); border-bottom: none; border-radius: 12px 12px 0 0; padding: 20px 16px 10px 16px; background: rgba(255,255,255,0.03); margin-bottom: 0px; }
     [data-testid="stForm"] { border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 12px 12px; padding: 0 16px 20px 16px; background: rgba(255,255,255,0.015); margin-bottom: 24px; }
-    
-    /* Match Details */
     .card-header { display: flex; justify-content: space-between; font-family: 'Courier New', monospace; font-size: 0.75rem; opacity: 0.7; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; margin-bottom: 16px; letter-spacing: 1px; }
     .matchup-flex { display: flex; align-items: center; justify-content: space-between; text-align: center; gap: 8px; margin-bottom: 16px; }
     .team-col { flex: 1; width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
@@ -33,46 +29,27 @@ st.markdown("""
     .score-col { flex: 0 0 auto; }
     .score-box { font-family: 'Courier New', monospace; font-size: 1.6rem; font-weight: 800; padding: 4px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; letter-spacing: 2px; }
     @media (max-width: 600px) { .team-name { font-size: 0.9rem; } .score-box { font-size: 1.4rem; padding: 2px 8px; } }
-    
-    /* Form Guide */
     .form-container { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; opacity: 0.8; }
     .form-arrow { font-size: 0.5rem; opacity: 0.5; text-transform: uppercase; margin: 0 2px; letter-spacing: 1px; }
     .form-item { display: flex; flex-direction: column; align-items: center; line-height: 1; margin: 0 1px;}
     .form-ha { font-size: 0.5rem; opacity: 0.5; font-weight: bold; margin-bottom: 2px; }
     .form-mark { font-size: 0.7rem; font-weight: bold; } 
-    
-    /* Odds & Bets */
     .info-row { display: flex; justify-content: space-around; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; }
     .odds-label { font-size: 0.6rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; }
     .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
     .social-bets-container { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05); }
     .bet-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; border: 1px solid rgba(255,255,255,0.05); color: #ccc; }
     .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); color: #fff; }
-    
-    /* AI Badge (New) */
     .bet-badge.ai { border: 1px solid rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.15); color: #e9d5ff; }
-    
     .bb-pick { font-weight: bold; color: #a5b4fc; text-transform: uppercase; }
     .bb-res-win { color: #4ade80; font-weight: bold; margin-left: 4px; }
     .bb-res-lose { color: #f87171; font-weight: bold; margin-left: 4px; }
-    
-    /* V6.1 Stats Styles */
     .stats-container { padding: 10px; background: rgba(0,0,0,0.2); border-radius: 0 0 8px 8px; margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.05); border-top: none; }
     .stats-header { font-size: 0.65rem; opacity: 0.6; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; display:flex; justify-content:space-between;}
-    
     .goal-event { font-size: 0.85rem; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; border-bottom: 1px dashed rgba(255,255,255,0.05); padding-bottom: 4px;}
     .goal-time { font-family: 'Courier New', monospace; color: #fbbf24; font-weight: bold; font-size: 0.8rem; width: 30px; text-align:right;}
     .goal-player { font-weight: bold; color: #fff; }
     .goal-assist { font-size: 0.75rem; opacity: 0.6; margin-left: 2px; font-style: italic; }
-    
-    .possession-wrapper { margin-top: 12px; }
-    .pos-label { font-size: 0.7rem; opacity: 0.7; text-align: center; margin-bottom: 2px; text-transform: uppercase;}
-    .pos-bar-bg { height: 6px; width: 100%; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; display: flex; }
-    .pos-home { height: 100%; background: #60a5fa; }
-    .pos-away { height: 100%; background: #f87171; }
-    .pos-vals { display: flex; justify-content: space-between; font-size: 0.75rem; font-family: monospace; margin-top: 2px; font-weight: bold;}
-
-    /* Dashboard & Admin */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
     .kpi-label { font-size: 0.65rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px;}
     .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; line-height: 1; }
@@ -82,31 +59,22 @@ st.markdown("""
     .status-msg { text-align: center; opacity: 0.5; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 12px; }
     .bm-badge { background: #fbbf24; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; }
     .live-dot { color: #f87171; animation: pulse 1.5s infinite; font-weight: bold; margin-right:4px; font-size: 1.2rem; line-height: 0; vertical-align: middle;}
-    
-    /* History Cards & Summary */
     .hist-card { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
-    
     .summary-box { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; }
     .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
     .summary-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; }
-    
     .summary-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 24px; width: 100%; }
     .summary-row { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px 20px; }
     .s-user { font-weight: bold; opacity: 0.9; }
     .s-amt { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; }
-    
     .budget-header { font-family: 'Courier New', monospace; text-align: center; margin-bottom: 20px; padding: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; font-size: 0.9rem; }
-    
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# ==============================================================================
-# 1. Database & Config Access
-# ==============================================================================
 @st.cache_resource
 def get_supabase():
     try:
@@ -116,7 +84,6 @@ def get_supabase():
 supabase = get_supabase()
 
 def fetch_all_data():
-    """Fetch all tables safely with NUCLEAR TYPE CONVERSION."""
     try:
         def get_df_safe(table, expected_cols):
             try:
@@ -130,19 +97,16 @@ def fetch_all_data():
 
         bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','payout','net','gw','placed_at'])
         odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
-        # V6.1: stats_data included
         results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score','stats_data'])
         bm_log = get_df_safe("bm_log", ['gw','bookmaker'])
         users = get_df_safe("users", ['username','password','role','team'])
         config = get_df_safe("config", ['key','value'])
         
-        # --- NUCLEAR CONVERSION ---
         for df in [bets, results, odds]:
             if not df.empty and 'match_id' in df.columns:
                 df['match_id'] = pd.to_numeric(df['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
                 df = df[df['match_id'] != '0']
 
-        # --- Sanitization ---
         if not bets.empty:
             bets['pick'] = bets['pick'].astype(str).str.strip().str.upper()
             bets['gw'] = bets['gw'].astype(str).str.strip().str.upper()
@@ -176,10 +140,6 @@ def get_config_value(config_df, key, default):
         try: return int(row.iloc[0]['value'])
         except: return row.iloc[0]['value']
     return default
-
-# ==============================================================================
-# 2. Business Logic (V6.1: Hybrid Sync & Scoped Settlement)
-# ==============================================================================
 
 def to_jst(iso_str):
     if not iso_str: return None
@@ -221,7 +181,6 @@ def extract_gw_num(gw_str):
     except: return 0
 
 def settle_bets_date_aware():
-    """DATE-BASED SCOPED UPDATE (V5.7 Logic)."""
     try:
         b_res = supabase.table("bets").select("*").execute()
         r_res = supabase.table("result").select("*").execute()
@@ -265,77 +224,74 @@ def settle_bets_date_aware():
         print(f"Settlement Error: {e}")
         return 0, str(e)
 
-# --- V6.1: RICH STATS SYNC VIA API-FOOTBALL ---
-def sync_details_rapidapi(results_df, rapidapi_key):
+# --- V6.2: IMPROVED STATS SYNC & FUZZY MATCH ---
+def normalize_name(name):
+    """Normalize team name for matching (remove FC, spaces, lower case)"""
+    if not name: return ""
+    name = name.lower()
+    name = name.replace("fc", "").replace("football club", "").replace("afc", "")
+    return re.sub(r'[^a-z]', '', name)
+
+def sync_details_rapidapi(results_df, rapidapi_key, force_limit=None):
     """
-    Fetches detailed match stats (Goals, Assists, etc.) from API-Football.
-    Resolves football-data.org match_id to API-Football fixture_id via Date matching.
+    Fetches detailed match stats with improved matching logic.
+    force_limit: If set, overrides the safe 5 match limit.
     """
-    if not rapidapi_key or results_df.empty: return 0
+    if not rapidapi_key or results_df.empty: return 0, "No key or data"
     
-    # Filter: FINISHED matches with NO stats_data
+    # Filter targets: Finished & No stats
     targets = results_df[
         (results_df['status'] == 'FINISHED') & 
         (results_df['stats_data'].isnull())
     ]
     
-    if targets.empty: return 0
+    if targets.empty: return 0, "No targets"
     
-    # SAFETY LIMIT: Only first 5 per run (100/day quota protection)
-    targets = targets.head(5)
+    limit = force_limit if force_limit else 5
+    targets = targets.head(limit)
     
     base_url = "https://v3.football.api-sports.io"
     headers_direct = {'x-apisports-key': rapidapi_key}
     
     synced_count = 0
+    logs = []
     
     for _, row in targets.iterrows():
         try:
-            # 1. Search for Fixture ID using Date
             date_str = pd.to_datetime(row['utc_kickoff']).strftime('%Y-%m-%d')
+            # 1. Get Fixtures for date
             url = f"{base_url}/fixtures?date={date_str}&league=39&season=2025"
             r = requests.get(url, headers=headers_direct)
             
             if r.status_code == 200:
                 data = r.json().get('response', [])
-                my_home = row['home'].lower().replace("fc", "").strip()
+                my_home_norm = normalize_name(row['home'])
                 
                 found_fixture = None
-                # Fuzzy Match Logic
                 for f in data:
-                    api_home = f['teams']['home']['name'].lower().replace("fc", "").strip()
-                    # Simple containment check
-                    if my_home in api_home or api_home in my_home:
+                    api_home_norm = normalize_name(f['teams']['home']['name'])
+                    # Robust Match: Contains either way
+                    if my_home_norm in api_home_norm or api_home_norm in my_home_norm:
                         found_fixture = f
                         break
                 
                 if found_fixture:
-                    # Found it! The 'found_fixture' object ALREADY contains 'events' and 'score'.
-                    # It might miss detailed statistics (possession) unless we ask for it, 
-                    # but standard search response is usually rich enough for Goals.
-                    # To be super safe and get everything, let's grab it.
-                    
-                    # Store the entire JSON
+                    # Update DB
                     supabase.table("result").update({"stats_data": found_fixture}).eq("match_id", row['match_id']).execute()
                     synced_count += 1
-                        
+                    logs.append(f"Synced: {row['home']}")
+                else:
+                    logs.append(f"Missed: {row['home']} (API has: {[f['teams']['home']['name'] for f in data]})")
+            else:
+                logs.append(f"API Error: {r.status_code}")
+                
         except Exception as e:
-            print(f"Stats Sync Error: {e}")
+            logs.append(f"Err: {e}")
             continue
             
-    return synced_count
+    return synced_count, logs
 
 def calculate_ai_prediction(match_row, odds_df):
-    """
-    V6.1: Generates an AI Prediction badge.
-    If 'stats_data' has predictions (rare in search), use it.
-    Else, calculate 'AI Probability' from Odds (Implied Probability).
-    """
-    # 1. Try real API prediction (if available in future)
-    # stats_json = match_row.get('stats_data')
-    # if stats_json and 'predictions' in stats_json: ...
-    
-    # 2. Heuristic AI (Odds-based) - This is robust and creates the UI the user wants.
     mid = match_row['match_id']
     o_row = odds_df[odds_df['match_id'] == mid]
     
@@ -345,24 +301,17 @@ def calculate_ai_prediction(match_row, odds_df):
         a = float(o_row.iloc[0]['away_win'])
         
         if h > 0 and d > 0 and a > 0:
-            # Implied Probabilities
             ip_h = 1/h
             ip_d = 1/d
             ip_a = 1/a
             total_ip = ip_h + ip_d + ip_a
-            
-            # Normalized %
             p_h = (ip_h / total_ip) * 100
             p_a = (ip_a / total_ip) * 100
             p_d = (ip_d / total_ip) * 100
             
-            # Determine "AI Pick" (Highest Prob)
-            if p_h > p_a and p_h > p_d:
-                return "HOME", int(p_h)
-            elif p_a > p_h and p_a > p_d:
-                return "AWAY", int(p_a)
-            else:
-                return "DRAW", int(p_d)
+            if p_h > p_a and p_h > p_d: return "HOME", int(p_h)
+            elif p_a > p_h and p_a > p_d: return "AWAY", int(p_a)
+            else: return "DRAW", int(p_d)
                 
     return None, 0
 
@@ -543,6 +492,20 @@ def sync_api(api_token):
         return True
     except: return False
 
+def determine_bet_outcome(bet_row, match_row):
+    db_res = str(bet_row.get('result', '')).strip().upper()
+    if db_res in ['WIN', 'LOSE']: return db_res
+    status = str(match_row.get('match_status', 'SCHEDULED')).strip().upper()
+    if status == 'FINISHED':
+        h_s = int(match_row['home_score']) if pd.notna(match_row['home_score']) else 0
+        a_s = int(match_row['away_score']) if pd.notna(match_row['away_score']) else 0
+        outcome = "DRAW"
+        if h_s > a_s: outcome = "HOME"
+        elif a_s > h_s: outcome = "AWAY"
+        user_pick = str(bet_row['pick']).strip().upper()
+        return 'WIN' if user_pick == outcome else 'LOSE'
+    return 'OPEN'
+
 # ==============================================================================
 # 3. Main Application
 # ==============================================================================
@@ -554,11 +517,11 @@ def main():
     token = get_api_token(config)
     rapid_key = get_rapidapi_key()
 
-    if 'v61_api_synced' not in st.session_state:
+    if 'v62_api_synced' not in st.session_state:
         with st.spinner("Syncing Schedule & Auto-Settling..."): 
             sync_api(token)
             settle_bets_date_aware()
-            st.session_state['v61_api_synced'] = True
+            st.session_state['v62_api_synced'] = True
     
     # --- 2. FETCH LATEST DATA ---
     bets, odds, results, bm_log, users, config = fetch_all_data()
@@ -566,10 +529,9 @@ def main():
     
     # --- 3. BACKGROUND STATS SYNC (Lazy Load) ---
     if rapid_key and not results.empty:
-        stats_synced = sync_details_rapidapi(results, rapid_key)
+        stats_synced, _ = sync_details_rapidapi(results, rapid_key)
         if stats_synced > 0:
-            st.toast(f"Detailed Stats Loaded: {stats_synced} matches", icon="📊")
-            # Reload results
+            st.toast(f"Stats Loaded: {stats_synced} matches", icon="📊")
             results = supabase.table("result").select("*").execute()
             results = pd.DataFrame(results.data)
             results['match_id'] = pd.to_numeric(results['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
@@ -624,7 +586,7 @@ def main():
 
     t1, t2, t3, t4, t5 = st.tabs(["MATCHES", "LIVE", "HISTORY", "DASHBOARD", "ADMIN"])
 
-    # --- TAB 1: MATCHES (With AI Badge) ---
+    # --- TAB 1: MATCHES ---
     with t1:
         c_h1, c_h2 = st.columns([3, 1])
         c_h1.markdown(f"### {target_gw}")
@@ -668,14 +630,10 @@ def main():
 
                     card_html = f"""<div class="app-card-top"><div class="card-header"><span>⏱ {dt_str}</span><span>{m['status']}</span></div><div class="matchup-flex"><div class="team-col"><span class="team-name">{m['home']}</span>{form_h}</div><div class="score-col"><span class="score-box">{score_disp}</span></div><div class="team-col"><span class="team-name">{m['away']}</span>{form_a}</div></div><div class="info-row"><div class="odds-label">HOME <span class="odds-value">{oh if oh else '-'}</span></div><div class="odds-label">DRAW <span class="odds-value">{od if od else '-'}</span></div><div class="odds-label">AWAY <span class="odds-value">{oa if oa else '-'}</span></div></div>"""
                     
-                    # Social Bets & AI Badge
                     badges = ""
-                    # 1. AI Badge Generation
                     ai_pick, ai_conf = calculate_ai_prediction(m, odds)
                     if ai_pick:
                         badges += f"""<div class="bet-badge ai"><span>🤖 AI:</span><span class="bb-pick">{ai_pick}</span> ({ai_conf}%)</div>"""
-                    
-                    # 2. User Bets
                     if not match_bets.empty:
                         for _, b in match_bets.iterrows():
                             me_cls = "me" if b['user'] == me else ""
@@ -686,9 +644,7 @@ def main():
                             if db_res == 'WIN': pnl_span = f"<span class='bb-res-win'>+¥{int(db_net):,}</span>"
                             elif db_res == 'LOSE': pnl_span = f"<span class='bb-res-lose'>-¥{int(abs(db_net)):,}</span>"
                             badges += f"""<div class="bet-badge {me_cls}"><span>{b['user']}:</span><span class="bb-pick">{pick_txt}</span> (¥{int(b['stake']):,}){pnl_span}</div>"""
-                    
-                    if badges:
-                        card_html += f"""<div class="social-bets-container">{badges}</div>"""
+                    if badges: card_html += f"""<div class="social-bets-container">{badges}</div>"""
                     card_html += "</div>"
                     st.markdown(card_html, unsafe_allow_html=True)
 
@@ -718,7 +674,7 @@ def main():
             else: st.info(f"No matches for {target_gw}")
         else: st.info("Loading...")
 
-    # --- TAB 2: LIVE (RICH STATS) ---
+    # --- TAB 2: LIVE ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH & SMART SETTLE", use_container_width=True): 
@@ -754,17 +710,12 @@ def main():
                     for _, b in mb.iterrows(): parts.append(f"{b['user']}:{b['pick'][0]}")
                     stake_str = " ".join(parts)
                 
-                # Header
                 st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:4px; border-radius:8px 8px 0 0; border:1px solid rgba(255,255,255,0.05); border-bottom:none;"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><span>{sts_disp}</span><span>{stake_str}</span></div></div>""", unsafe_allow_html=True)
                 
-                # Details Expander
                 with st.expander("📊 Goals & Stats", expanded=False):
                     stats_json = m.get('stats_data')
                     goals_html = ""
-                    pos_html = ""
-                    
                     if stats_json:
-                        # 1. Goals
                         events = stats_json.get('events', [])
                         for ev in events:
                             if ev['type'] == 'Goal':
@@ -773,52 +724,31 @@ def main():
                                 assist = ev['assist'].get('name')
                                 assist_str = f"(Ast: {assist})" if assist else ""
                                 goals_html += f"""<div class="goal-event"><div class="goal-time">{time_m}'</div><div><span class="goal-player">{player}</span> <span class="goal-assist">{assist_str}</span></div></div>"""
-                        
-                        # 2. Possession (Simplified)
-                        # API-Football fixture stats usually in 'statistics' array of 2 objects
-                        # This part depends on structure. If available we parse.
-                        # For V6.1 safety, if goals exist, we show them.
-                        pass
-                    
                     if not goals_html: goals_html = "<div style='opacity:0.5; font-size:0.8rem; text-align:center'>No goals recorded yet.</div>"
-                    
-                    st.markdown(f"""
-                    <div class="stats-container">
-                        <div class="stats-header">Match Events</div>
-                        {goals_html}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f"""<div class="stats-container"><div class="stats-header">Match Events</div>{goals_html}</div>""", unsafe_allow_html=True)
 
-    # --- TAB 3: HISTORY (V5.9.3 Fixed) ---
+    # --- TAB 3: HISTORY (V5.9.3) ---
     with t3:
         if not bets.empty:
             c1, c2 = st.columns(2)
             all_gws = sorted(list(bets['gw'].unique()), key=lambda x: int("".join([c for c in str(x) if c.isdigit()] or 0)), reverse=True)
-            
             def_u_idx = 0 
             def_g_idx = 0 
             if target_gw in all_gws: def_g_idx = all_gws.index(target_gw)
-            
             sel_u = c1.selectbox("User", ["All"] + list(users['username'].unique()), index=def_u_idx)
-            
-            if sel_u == "All":
-                gw_opts = all_gws
+            if sel_u == "All": gw_opts = all_gws
             else:
                 gw_opts = ["All"] + all_gws
                 if target_gw in all_gws: def_g_idx = all_gws.index(target_gw) + 1
-            
             if def_g_idx >= len(gw_opts): def_g_idx = 0
             sel_g = c2.selectbox("GW", gw_opts, index=def_g_idx)
-            
             hist = bets.copy()
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
-            
             results_safe = results.rename(columns={'status': 'match_status'})
             hist = pd.merge(hist, results_safe[['match_id', 'home', 'away', 'match_status']], on='match_id', how='left')
             hist['dt_jst'] = hist['placed_at'].apply(to_jst)
             hist = hist.sort_values('dt_jst', ascending=False)
-            
             if not hist.empty:
                 total_net = hist['net'].sum()
                 if sel_u != "All":
@@ -835,7 +765,6 @@ def main():
                         html_list.append(f"""<div class="summary-row"><div class="s-user">{r['user']}</div><div class="s-amt" style="color:{u_col}">{u_sign}¥{int(u_net):,}</div></div>""")
                     html_list.append('</div>')
                     st.markdown("".join(html_list), unsafe_allow_html=True)
-            
             st.markdown("---") 
             for _, b in hist.iterrows():
                 db_res = str(b.get('result', '')).strip().upper()
@@ -891,6 +820,16 @@ def main():
             if st.button("🚨 FORCE SCOPED SETTLE", type="primary"):
                 count, scope_desc = settle_bets_date_aware()
                 st.success(f"Settled {count} bets ({scope_desc})! Reloading..."); time.sleep(1); st.rerun()
+            st.write("---")
+            st.markdown("##### 🕵️‍♂️ STATS DEBUGGER (V6.2)")
+            if st.button("⚡ FORCE STATS SYNC (First 15 matches)", type="secondary"):
+                if not rapid_key: st.error("No API-Football Key!")
+                else:
+                    synced_n, logs = sync_details_rapidapi(results, rapid_key, force_limit=15)
+                    st.success(f"Tried syncing 15 matches. Success: {synced_n}")
+                    with st.expander("Sync Logs"):
+                        st.write(logs)
+                    time.sleep(2); st.rerun()
             st.markdown("#### ODDS EDITOR")
             with st.expander("📝 Update Odds", expanded=True):
                 if not results.empty:
