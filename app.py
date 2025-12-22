@@ -365,7 +365,7 @@ def get_strict_target_gw(results_df, target_season):
     season_start = pd.Timestamp(f"{target_season}-07-01", tz=JST)
     current_season = results_df[results_df['dt_jst'] >= season_start]
     if current_season.empty: return "GW1"
-    future = current_season[current_season['dt_jst'] > (now_jst - timedelta(hours=4))].sort_values('dt_jst')
+    future = current_season[current_season['dt_jst'] > (now_jst - timedelta(hours=3))].sort_values('dt_jst')
     if not future.empty: return future.iloc[0]['gw']
     past = current_season.sort_values('dt_jst', ascending=False)
     if not past.empty: return past.iloc[0]['gw']
