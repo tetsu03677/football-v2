@@ -85,6 +85,12 @@ st.markdown("""
     .chip-boost { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
     .chip-limit { background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.4); }
     .chip-shield { background: rgba(168, 162, 158, 0.2); color: #d6d3d1; border: 1px solid rgba(168, 162, 158, 0.4); }
+    
+    /* Shield Console Style */
+    .shield-row { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .shield-stat { font-family: monospace; font-weight: bold; }
+    .shield-locked { color: #f87171; font-size: 0.8rem; font-weight: bold; display: flex; align-items: center; gap: 4px; }
+    .shield-ready { color: #4ade80; font-size: 0.8rem; font-weight: bold; display: flex; align-items: center; gap: 4px; }
 
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
@@ -671,25 +677,23 @@ def main():
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
                             
-                            # --- V8.5 CHIP SELECTOR ---
+                            # --- V8.5 CHIP SELECTOR (Redesigned) ---
                             # Check inventory
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
                             
-                            # Build options
+                            # Build options (Simple Tech Specs)
                             chip_opts = ["None"]
-                            if inv.get('BOOST', 0) > 0: chip_opts.append("🚀 ODDS BOOST (+1.0 Odds)")
-                            if inv.get('LIMIT', 0) > 0: chip_opts.append("🔓 LIMIT BREAKER (Limit 20k)")
+                            if inv.get('BOOST', 0) > 0: chip_opts.append("🚀 ODDS BOOST")
+                            if inv.get('LIMIT', 0) > 0: chip_opts.append("🔓 LIMIT BREAKER")
                             
                             sel_chip_str = st.radio("Use Chip?", chip_opts, horizontal=True, key=f"chp_{mid}", label_visibility="collapsed")
                             
-                            # Explain text for simple users
+                            # Tech Spec Display (No Childish Text)
                             if "BOOST" in sel_chip_str:
-                                st.caption("💡 **効果:** オッズが+1.0倍されます。勝てば大儲けですが、負けたらチップの無駄遣いです。")
+                                st.caption("**Effect:** Odds +1.0 / **Cost:** 1 Chip")
                             elif "LIMIT" in sel_chip_str:
-                                st.caption("💡 **効果:** このGWの予算上限が20,000円に解放されます。「絶対勝てる」時だけ使いましょう。")
-                            else:
-                                st.caption("💡 チップを使わず通常ベットします。")
+                                st.caption("**Effect:** GW Budget Limit → ¥20,000 / **Cost:** 1 Chip")
 
                             # Logic for budget check
                             temp_limit = budget_limit
@@ -710,11 +714,6 @@ def main():
                                     
                                     # Update Inventory if Chip Used (Decrease)
                                     if final_chip:
-                                        # Only decrease if new bet, or changing chip. (Simplification: Just decrease, Admin can fix if error.
-                                        # Strict logic: Check if I already used a chip on this match?)
-                                        # V8.5 Strict: One chip per match.
-                                        
-                                        # Decrement DB
                                         curr_amt = inv.get(final_chip, 0)
                                         if curr_amt > 0:
                                             supabase.table("user_chips").update({"amount": curr_amt - 1}).match({"user_name": me, "chip_type": final_chip}).execute()
@@ -1041,12 +1040,12 @@ def main():
                         supabase.table("bm_log").upsert({"gw": t_gw, "bookmaker": t_u}).execute()
                         st.success("Assigned"); time.sleep(1); st.rerun()
 
-    # --- TAB 6: CHIPS (V8.5 NEW) ---
+    # --- TAB 6: CHIPS (V8.5 REDESIGNED) ---
     with t6:
-        st.markdown("### 💎 ARMORY (Tactical Chips)")
+        st.markdown("### 💎 ARMORY")
         
-        # 1. Inventory
-        st.markdown("#### 🎒 YOUR INVENTORY")
+        # 1. Inventory (Professional UI)
+        st.markdown("#### 🎒 INVENTORY")
         if not user_chips.empty:
             my_chips = user_chips[user_chips['user_name'] == me]
             if not my_chips.empty:
@@ -1055,27 +1054,20 @@ def main():
                 
                 with cols[0]:
                     st.metric("🚀 ODDS BOOST", f"x{inv_map.get('BOOST', 0)}")
-                    st.caption("オッズを+1.0倍する。勝負所で使え。")
+                    st.caption("Effect: +1.0 Odds")
                 with cols[1]:
                     st.metric("🔓 LIMIT BREAKER", f"x{inv_map.get('LIMIT', 0)}")
-                    st.caption("予算上限を20,000円にする。全ツッパ用。")
+                    st.caption("Effect: Limit 20k")
                 with cols[2]:
                     st.metric("🛡️ BM SHIELD", f"x{inv_map.get('SHIELD', 0)}")
-                    st.caption("自分がBMの試合を無効にする。大負けした時用。")
+                    st.caption("Effect: Void Match")
             else:
-                st.info("No chips found. Ask Admin to Initialize.")
+                st.info("No chips found.")
         
         st.divider()
 
-        # 2. BM SHIELD CONSOLE
-        st.markdown("#### 🛡️ BM SHIELD ACTIVATION CONSOLE")
-        st.info("💡 **説明:** あなたがBookmakerを担当した試合で大負けした場合、ここから試合を「無効試合（ノーゲーム）」にできます。全員に賭け金が返金されます。ただし、**「誰かがチップを使った試合」**には発動できません。")
-        
-        # Logic: Find matches where: 
-        # 1. me == BM (check bm_log)
-        # 2. status == FINISHED
-        # 3. bm_shield == FALSE
-        # 4. next GW hasn't started (Simplified: just show all eligible for now)
+        # 2. BM SHIELD CONSOLE (Clean UI)
+        st.markdown("#### 🛡️ SHIELD CONSOLE")
         
         # Get my BM GWs
         my_bm_gws = []
@@ -1099,52 +1091,54 @@ def main():
                     mid = m['match_id']
                     m_name = f"{m['home']} vs {m['away']}"
                     
-                    # Check if ANY chip used in this match
+                    # Check if ANY chip used in this match (BUG FIX HERE)
                     m_bets = bets[bets['match_id'] == mid]
-                    chips_used_in_match = []
+                    chips_used_in_match = 0 # Initialize as 0
                     if not m_bets.empty:
                          chips_used_in_match = m_bets[m_bets['chip_used'] != ""].shape[0]
                     
                     is_dirty = (chips_used_in_match > 0)
                     
-                    # Calculate My Loss (approx)
-                    # Actually we can just show the match and let BM decide
-                    
                     with st.expander(f"{m['gw']}: {m_name} ({m['home_score']}-{m['away_score']})", expanded=True):
-                        c1, c2 = st.columns([3, 1])
-                        with c1:
-                            if is_dirty:
-                                st.warning(f"⚠️ Cannot Shield: {chips_used_in_match} players used chips in this match.")
-                            else:
-                                st.success("✅ Eligible for Shield")
+                        # Row Layout
+                        c1, c2, c3 = st.columns([2, 2, 1])
                         
+                        with c1:
+                            st.markdown(f"**Match Status:** Finished")
+                            if is_dirty:
+                                st.markdown("<div class='shield-locked'>🔴 LOCKED (Chips Active)</div>", unsafe_allow_html=True)
+                            else:
+                                st.markdown("<div class='shield-ready'>🟢 READY TO VOID</div>", unsafe_allow_html=True)
+
                         with c2:
                             # Check Shield Inventory
                             shield_count = 0
                             if not user_chips.empty:
                                 u_row = user_chips[(user_chips['user_name'] == me) & (user_chips['chip_type'] == 'SHIELD')]
                                 if not u_row.empty: shield_count = int(u_row.iloc[0]['amount'])
+                            st.caption(f"Your Shields: {shield_count}")
                             
+                        with c3:
                             if is_dirty:
-                                st.button("🚫 LOCKED", key=f"sh_lk_{mid}", disabled=True)
+                                st.button("🔒", key=f"sh_lk_{mid}", disabled=True)
                             elif shield_count <= 0:
-                                st.button("🚫 NO CHIPS", key=f"sh_nc_{mid}", disabled=True)
+                                st.button("🚫", key=f"sh_nc_{mid}", disabled=True)
                             else:
-                                if st.button("🛡️ ACTIVATE", key=f"sh_act_{mid}", type="primary"):
+                                if st.button("🛡️ VOID", key=f"sh_act_{mid}", type="primary", use_container_width=True):
                                     # 1. Update Result
                                     supabase.table("result").update({"bm_shield": True}).eq("match_id", mid).execute()
                                     # 2. Decrement Chip
                                     supabase.table("user_chips").update({"amount": shield_count - 1}).match({"user_name": me, "chip_type": "SHIELD"}).execute()
                                     # 3. Settle
                                     settle_bets_date_aware()
-                                    st.success("SHIELD ACTIVATED! Match Voided."); time.sleep(2); st.rerun()
+                                    st.success("MATCH VOIDED"); time.sleep(1.5); st.rerun()
                     found_candidate = True
                 
-                if not found_candidate: st.info("No eligible matches found.")
+                if not found_candidate: st.caption("No eligible matches found.")
             else:
-                st.info("No finished matches found where you are BM.")
+                st.caption("No finished matches found where you are BM.")
         else:
-             st.info("You haven't been a BM yet.")
+             st.caption("You haven't been a BM yet.")
 
 if __name__ == "__main__":
     main()
