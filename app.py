@@ -13,9 +13,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (V9.1 Undo & Polish)
+# 0. System Configuration & CSS (V9.2 No Combo)
 # ==============================================================================
-st.set_page_config(page_title="Football App V9.1", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V9.2", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -151,6 +151,7 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
+        # Bets table includes dummy bets for Limit Breaker (match_id=999999)
         bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','payout','net','gw','placed_at','chip_used'])
         odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
         results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score','bm_shield'])
@@ -251,9 +252,8 @@ def settle_bets_date_aware():
         if not b_res.data or not r_res.data: return 0, "No data"
         df_b = pd.DataFrame(b_res.data)
         df_r = pd.DataFrame(r_res.data)
-        
+        # Filter out Limit Breaker dummy bets (match_id=999999)
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
-        # Exclude dummy bets for settlement
         df_b = df_b[df_b['match_id'] != '999999'] 
         
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
@@ -583,13 +583,14 @@ def main():
     # --- BUDGET LOGIC (LIMIT BREAKER AWARE) ---
     base_budget = get_config_value(config, "max_total_stake_per_gw", 8000)
     
-    # Check Limit Breaker status
+    # Check Limit Breaker status via dummy bets
     my_gw_bets = pd.DataFrame()
     active_breakers = []
     if not bets.empty:
         lb_bets = bets[(bets['gw'] == target_gw) & (bets['chip_used'] == 'LIMIT') & (bets['match_id'] == '999999')]
         if not lb_bets.empty:
             active_breakers = lb_bets['user'].unique().tolist()
+        
         my_gw_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw) & (bets['match_id'] != '999999')]
     
     has_limit_breaker = (me in active_breakers)
@@ -604,6 +605,14 @@ def main():
     col = "#4ade80" if bal >= 0 else "#f87171"
     st.sidebar.markdown(f"<div style='font-size:1.8rem; font-weight:800; color:{col}; font-family:monospace'>¥{bal:,}</div>", unsafe_allow_html=True)
     
+    if not user_chips.empty:
+        my_chips = user_chips[user_chips['user_name'] == me]
+        chip_counts = {r['chip_type']: r['amount'] for _, r in my_chips.iterrows()}
+        c_boost = chip_counts.get('BOOST', 0)
+        c_limit = chip_counts.get('LIMIT', 0)
+        c_shield = chip_counts.get('SHIELD', 0)
+        st.sidebar.markdown(f"**Chips:** ⚡x{c_boost} 💎x{c_limit} 🛡️x{c_shield}")
+
     if st.sidebar.button("Logout"): st.session_state['user'] = None; st.rerun()
 
     t1, t2, t3, t4, t5, t6 = st.tabs(["MATCHES", "LIVE", "HISTORY", "DASHBOARD", "ADMIN", "CHIPS"])
@@ -698,19 +707,26 @@ def main():
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
                             
-                            # Determine existing chip usage for this match
                             current_chip_used = str(my_bet.iloc[0]['chip_used']).strip() if not my_bet.empty else ""
                             
-                            # Build Options
-                            # If already BOOST, default to BOOST. If user switches to Normal, we refund.
-                            chip_opts = ["通常", "ODDS BOOST"]
+                            # LOGIC CHANGE: COMBO PREVENTION
+                            # If Limit Breaker active, Boost option is hidden or disabled.
+                            if has_limit_breaker:
+                                chip_opts = ["通常"]
+                                if current_chip_used == 'BOOST': chip_opts.append("ODDS BOOST (Active)") # Should allow undo
+                            else:
+                                chip_opts = ["通常"]
+                                if inv.get('BOOST', 0) > 0 or current_chip_used == 'BOOST': chip_opts.append("ODDS BOOST")
                             
                             default_idx = 0
-                            if current_chip_used == 'BOOST': default_idx = 1
+                            if current_chip_used == 'BOOST' and "ODDS BOOST" in chip_opts: default_idx = 1
+                            elif current_chip_used == 'BOOST' and "ODDS BOOST (Active)" in chip_opts: default_idx = 1
                             
                             sel_chip_str = st.radio("オプション", chip_opts, index=default_idx, horizontal=True, key=f"chp_{mid}", label_visibility="collapsed")
                             
                             if "BOOST" in sel_chip_str: st.caption("⚡ **効果:** オッズ+1.0倍 / **コスト:** 1枚")
+                            if has_limit_breaker and current_chip_used != 'BOOST':
+                                st.caption("🔒 Limit Breaker発動中はODDS BOOSTを使用できません (コンボ不可)")
                             
                             new_total = current_spend - (int(my_bet.iloc[0]['stake']) if not my_bet.empty else 0) + stake
                             over_budget = new_total > budget_limit
@@ -972,7 +988,7 @@ def main():
                         <div class="chip-inv-count">x{inv_map.get('LIMIT', 0)}</div>
                         <div class="chip-inv-desc">このGWの予算上限を20,000円に拡張する。</div>
                     </div>""", unsafe_allow_html=True)
-                    # LIMIT BREAKER ACTION (Undo Logic)
+                    # LIMIT BREAKER ACTION (Undo Logic + Combo Check)
                     is_active = has_limit_breaker
                     btn_disabled = False
                     
@@ -988,10 +1004,19 @@ def main():
                     else:
                         if inv_map.get('LIMIT', 0) > 0:
                             if st.button("発動する", use_container_width=True):
-                                pl = {"key": f"{target_gw}:{me}:LIMIT", "gw": target_gw, "user": me, "match_id": 999999, "pick": "LIMIT_BREAKER", "stake": 0, "chip_used": "LIMIT"}
-                                supabase.table("bets").upsert(pl).execute()
-                                supabase.table("user_chips").update({"amount": inv_map.get('LIMIT') - 1}).match({"user_name": me, "chip_type": "LIMIT"}).execute()
-                                st.success("ACTIVATED!"); time.sleep(1.0); st.rerun()
+                                # LOGIC CHANGE: COMBO PREVENTION (Check if Boost used in this GW)
+                                already_boosted = False
+                                if not bets.empty:
+                                    boost_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw) & (bets['chip_used'] == 'BOOST')]
+                                    if not boost_bets.empty: already_boosted = True
+                                
+                                if already_boosted:
+                                    st.error("禁止事項: このGWですでにODDS BOOSTを使用しています。コンボはできません。")
+                                else:
+                                    pl = {"key": f"{target_gw}:{me}:LIMIT", "gw": target_gw, "user": me, "match_id": 999999, "pick": "LIMIT_BREAKER", "stake": 0, "chip_used": "LIMIT"}
+                                    supabase.table("bets").upsert(pl).execute()
+                                    supabase.table("user_chips").update({"amount": inv_map.get('LIMIT') - 1}).match({"user_name": me, "chip_type": "LIMIT"}).execute()
+                                    st.success("ACTIVATED!"); time.sleep(1.0); st.rerun()
                         else:
                             st.button("在庫なし", disabled=True, use_container_width=True)
 
