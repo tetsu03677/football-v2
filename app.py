@@ -13,9 +13,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (V8.9 Final Polish)
+# 0. System Configuration & CSS (V9.0 Final Polish)
 # ==============================================================================
-st.set_page_config(page_title="Football App V8.9", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V9.0", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -89,11 +89,32 @@ st.markdown("""
     /* Section Headers */
     .section-header { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; margin-top: 20px; margin-bottom: 12px; border-left: 4px solid #fbbf24; padding-left: 10px; text-transform: uppercase; letter-spacing: 1px; color: #fff; }
 
-    /* Inventory Cards Internal Styles */
-    .chip-inv-icon { font-size: 2rem; margin-bottom: 8px; }
-    .chip-inv-name { font-weight: bold; font-size: 0.85rem; color: #fff; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px;}
-    .chip-inv-count { font-family: 'Courier New', monospace; font-size: 1.6rem; font-weight: 800; color: #fbbf24; margin-bottom: 8px; }
-    .chip-inv-desc { font-size: 0.75rem; opacity: 0.8; line-height: 1.5; min-height: 4.5em; text-align: left; }
+    /* Inventory Cards (Refined V9) */
+    .chip-inventory-card {
+        background: rgba(255,255,255,0.03); 
+        border: none;
+        padding: 8px 4px; 
+        text-align: center;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        /* Bottom spacing for mobile */
+        margin-bottom: 20px; 
+    }
+    
+    /* Header Row: Icon + Title */
+    .chip-header-row {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        margin-bottom: 8px;
+    }
+    .chip-inv-icon { font-size: 1.6rem; margin: 0; line-height: 1; }
+    .chip-inv-name { font-weight: 800; font-size: 0.95rem; color: #fff; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
+    
+    .chip-inv-count { font-family: 'Courier New', monospace; font-size: 1.8rem; font-weight: 800; color: #fbbf24; margin-bottom: 12px; line-height:1; }
+    .chip-inv-desc { font-size: 0.75rem; opacity: 0.7; line-height: 1.4; min-height: 3.2em; text-align: left; }
     
     /* Public Intel List */
     .intel-row {
@@ -954,11 +975,21 @@ def main():
             c1, c2, c3 = st.columns(3)
             with c1:
                 with st.container(border=True):
-                    st.markdown(f"""<div class="chip-inventory-card" style="border:none;"><div class="chip-inv-icon">⚡</div><div class="chip-inv-name">ODDS BOOST</div><div class="chip-inv-count">x{inv_map.get('BOOST', 0)}</div><div class="chip-inv-desc">的中時の利益を増幅させる攻撃型チップ。オッズの低い堅実な試合で確実に稼ぐか、大穴狙いで一攫千金を狙うか、使い所が勝負を分ける。</div></div>""", unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div class="chip-inventory-card">
+                        <div class="chip-header-row"><span class="chip-inv-icon">⚡</span><span class="chip-inv-name">ODDS BOOST</span></div>
+                        <div class="chip-inv-count">x{inv_map.get('BOOST', 0)}</div>
+                        <div class="chip-inv-desc">的中時のオッズを+1.0倍にする。<br>※MATCHESタブで使用</div>
+                    </div>""", unsafe_allow_html=True)
             with c2:
                 with st.container(border=True):
-                    st.markdown(f"""<div class="chip-inventory-card" style="border:none;"><div class="chip-inv-icon">💎</div><div class="chip-inv-name">LIMIT BREAKER</div><div class="chip-inv-count">x{inv_map.get('LIMIT', 0)}</div><div class="chip-inv-desc">勝負所を見極めた全ツッパ用。通常8,000円の足かせを外し、最大20,000円までベット可能にする。自信のあるGWで一気に差をつけろ。</div></div>""", unsafe_allow_html=True)
-                    # LIMIT BREAKER ACTIVATION
+                    st.markdown(f"""
+                    <div class="chip-inventory-card">
+                        <div class="chip-header-row"><span class="chip-inv-icon">💎</span><span class="chip-inv-name">LIMIT BREAKER</span></div>
+                        <div class="chip-inv-count">x{inv_map.get('LIMIT', 0)}</div>
+                        <div class="chip-inv-desc">このGWの予算上限を20,000円に拡張する。</div>
+                    </div>""", unsafe_allow_html=True)
+                    # LIMIT BREAKER ACTION (Inside the same container for alignment)
                     is_active = has_limit_breaker
                     btn_disabled = (inv_map.get('LIMIT', 0) <= 0) or is_active
                     btn_label = "✅ 解放中" if is_active else ("発動する" if not btn_disabled else "在庫なし")
@@ -970,7 +1001,12 @@ def main():
 
             with c3:
                 with st.container(border=True):
-                    st.markdown(f"""<div class="chip-inventory-card" style="border:none;"><div class="chip-inv-icon">🛡️</div><div class="chip-inv-name">BM SHIELD</div><div class="chip-inv-count">x{inv_map.get('SHIELD', 0)}</div><div class="chip-inv-desc">まさかの大波乱から身を守る保険。自分がBMを担当した試合で大負けした際、その試合を無効化（ノーゲーム）にし、損失を帳消しにする。</div></div>""", unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div class="chip-inventory-card">
+                        <div class="chip-header-row"><span class="chip-inv-icon">🛡️</span><span class="chip-inv-name">BM SHIELD</span></div>
+                        <div class="chip-inv-count">x{inv_map.get('SHIELD', 0)}</div>
+                        <div class="chip-inv-desc">自分がBMの試合を無効試合（返金）にする。<br>※期限: 次節開始前まで</div>
+                    </div>""", unsafe_allow_html=True)
         
         # 2. Public Intel List
         st.markdown("<div class='section-header'>全員のチップ保有状況</div>", unsafe_allow_html=True)
