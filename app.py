@@ -55,6 +55,7 @@ st.markdown("""
     .bb-res-win { color: #4ade80; font-weight: bold; font-family: monospace; }
     .bb-res-lose { color: #f87171; font-weight: bold; font-family: monospace; }
     .bb-res-pot { color: #fbbf24; font-weight: bold; font-family: monospace; opacity: 0.8; }
+    .bb-void { color: #aaa; text-decoration: line-through; }
     
     /* Dashboard & Admin & History (Restored V5.9.3 Styles) */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
@@ -69,6 +70,7 @@ st.markdown("""
     .hist-card { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #444; }
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
+    .h-void { border-left-color: #aaa; }
     .summary-box { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; }
     .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
     .summary-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; }
@@ -78,6 +80,12 @@ st.markdown("""
     .s-user { font-weight: bold; opacity: 0.9; }
     .s-amt { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; }
     
+    /* CHIP STYLES */
+    .chip-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; margin-left: 4px; }
+    .chip-boost { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    .chip-limit { background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.4); }
+    .chip-shield { background: rgba(168, 162, 158, 0.2); color: #d6d3d1; border: 1px solid rgba(168, 162, 158, 0.4); }
+
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
@@ -106,12 +114,15 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','payout','net','gw','placed_at'])
+        # Updated bets for chip_used, user_chips table
+        bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','payout','net','gw','placed_at','chip_used'])
         odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
-        results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score'])
+        # Updated result for bm_shield
+        results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score','bm_shield'])
         bm_log = get_df_safe("bm_log", ['gw','bookmaker'])
         users = get_df_safe("users", ['username','password','role','team'])
         config = get_df_safe("config", ['key','value'])
+        user_chips = get_df_safe("user_chips", ['user_name','chip_type','amount'])
         
         for df in [bets, results, odds]:
             if not df.empty and 'match_id' in df.columns:
@@ -123,15 +134,17 @@ def fetch_all_data():
             bets['gw'] = bets['gw'].astype(str).str.strip().str.upper()
             bets['result'] = bets['result'].astype(str).str.strip().str.upper().replace({'NONE': '', 'NAN': ''})
             bets['net'] = pd.to_numeric(bets['net'], errors='coerce').fillna(0)
+            bets['chip_used'] = bets['chip_used'].fillna("")
         
         if not results.empty:
             results['status'] = results['status'].astype(str).str.strip().str.upper()
             results['gw'] = results['gw'].astype(str).str.strip().str.upper()
+            results['bm_shield'] = results['bm_shield'].fillna(False)
             
-        return bets, odds, results, bm_log, users, config
+        return bets, odds, results, bm_log, users, config, user_chips
     except Exception as e:
         st.error(f"System Error: {e}")
-        return [pd.DataFrame()]*6
+        return [pd.DataFrame()]*7
 
 def get_api_token(config_df):
     token = st.secrets.get("api_token")
@@ -212,6 +225,11 @@ def settle_bets_date_aware():
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         df_r['dt_jst'] = df_r['utc_kickoff'].apply(to_jst)
         df_r['gw_num'] = df_r['gw'].apply(extract_gw_num)
+        
+        # Ensure new cols exist
+        if 'bm_shield' not in df_r.columns: df_r['bm_shield'] = False
+        if 'chip_used' not in df_b.columns: df_b['chip_used'] = ""
+        
         now = datetime.datetime.now(JST)
         past_matches = df_r[df_r['dt_jst'] < now].sort_values('dt_jst', ascending=False)
         current_gw = 38 
@@ -219,24 +237,49 @@ def settle_bets_date_aware():
         target_gws = range(current_gw - 10, current_gw + 2)
         df_r_scoped = df_r[df_r['gw_num'].isin(target_gws)].copy()
         df_r_scoped = df_r_scoped.rename(columns={'status': 'match_status'})
-        merged = pd.merge(df_b, df_r_scoped[['match_id', 'match_status', 'home_score', 'away_score', 'gw_num']], on='match_id', how='inner')
+        merged = pd.merge(df_b, df_r_scoped[['match_id', 'match_status', 'home_score', 'away_score', 'gw_num', 'bm_shield']], on='match_id', how='inner')
         updates_count = 0
         for _, row in merged.iterrows():
             m_status = str(row.get('match_status', '')).strip().upper()
             if m_status == 'FINISHED':
                 h_s = int(row['home_score'])
                 a_s = int(row['away_score'])
+                
+                # --- CHIP LOGIC: BM SHIELD ---
+                # If BM Shield is TRUE, result is VOID (Refund)
+                is_void = bool(row.get('bm_shield', False))
+                
                 outcome = "DRAW"
                 if h_s > a_s: outcome = "HOME"
                 elif a_s > h_s: outcome = "AWAY"
+                
                 bet_pick = str(row['pick']).strip().upper()
                 final_res = 'WIN' if bet_pick == outcome else 'LOSE'
+                
+                if is_void: final_res = 'VOID'
+                
                 stake = float(row['stake']) if row['stake'] else 0
-                odds = float(row['odds']) if row['odds'] else 1.0
-                payout = int(stake * odds) if final_res == 'WIN' else 0
-                net = int(payout - stake)
+                
+                # --- CHIP LOGIC: ODDS BOOST ---
+                # If Boost used, odds + 1.0
+                base_odds = float(row['odds']) if row['odds'] else 1.0
+                chip_used = str(row.get('chip_used', '')).strip()
+                if chip_used == 'BOOST':
+                    base_odds += 1.0
+                
+                if final_res == 'WIN':
+                    payout = int(stake * base_odds)
+                    net = int(payout - stake)
+                elif final_res == 'VOID':
+                    payout = int(stake)
+                    net = 0
+                else:
+                    payout = 0
+                    net = int(-stake)
+                
                 curr_res = str(row.get('result', '')).strip().upper()
                 curr_net = float(row.get('net', 0)) if pd.notna(row.get('net')) else 0
+                
                 if curr_res != final_res or int(curr_net) != net:
                     supabase.table("bets").update({"result": final_res, "payout": payout, "net": net}).eq("key", row['key']).execute()
                     updates_count += 1
@@ -274,23 +317,31 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
             if nums: bm_map[f"GW{nums}"] = r['bookmaker']
     if bets_df.empty: return stats, bm_map
     results_safe = results_df.rename(columns={'status': 'match_status'})
-    merged = pd.merge(bets_df, results_safe[['match_id', 'match_status', 'home_score', 'away_score']], on='match_id', how='left')
+    merged = pd.merge(bets_df, results_safe[['match_id', 'match_status', 'home_score', 'away_score', 'bm_shield']], on='match_id', how='left')
     for _, b in merged.iterrows():
         user = b['user']
         if user not in stats: continue
         db_res = str(b.get('result', '')).strip().upper()
+        # If VOID/Shielded, net is 0, ignored in PnL but refund happened
         db_net = float(b['net']) if pd.notna(b['net']) and str(b['net']).strip() != '' else 0
         stake = float(b['stake']) if b['stake'] else 0
-        odds = float(b['odds']) if b['odds'] else 1.0
+        
+        # Odds logic for potential
+        raw_odds = float(b['odds']) if b['odds'] else 1.0
+        if str(b.get('chip_used', '')) == 'BOOST': raw_odds += 1.0
+
         gw_key = f"GW{''.join([c for c in str(b['gw']) if c.isdigit()])}"
         bm = bm_map.get(gw_key)
-        if db_res in ['WIN', 'LOSE']:
+        
+        if db_res in ['WIN', 'LOSE', 'VOID']:
             stats[user]['total'] += 1
             stats[user]['balance'] += int(db_net)
             if db_res == 'WIN': stats[user]['wins'] += 1
-            if bm and bm in stats and bm != user: stats[bm]['balance'] -= int(db_net)
+            # BM Logic: If Shielded (VOID), BM takes no hit. If WIN/LOSE, standard logic
+            if db_res != 'VOID' and bm and bm in stats and bm != user: 
+                stats[bm]['balance'] -= int(db_net)
         else:
-            stats[user]['potential'] += int((stake * odds) - stake)
+            stats[user]['potential'] += int((stake * raw_odds) - stake)
     return stats, bm_map
 
 def calculate_profitable_clubs_fixed(bets_df, results_df):
@@ -321,7 +372,7 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
     gw_bets = bets_df[bets_df['gw'] == target_gw].copy() if not bets_df.empty else pd.DataFrame()
     if not gw_bets.empty:
         results_safe = results_df.rename(columns={'status': 'match_status'})
-        gw_bets = pd.merge(gw_bets, results_safe[['match_id', 'match_status', 'home_score', 'away_score']], on='match_id', how='left')
+        gw_bets = pd.merge(gw_bets, results_safe[['match_id', 'match_status', 'home_score', 'away_score', 'bm_shield']], on='match_id', how='left')
         current_bm = bm_map.get(target_gw)
         for _, b in gw_bets.iterrows():
             user = b['user']
@@ -329,12 +380,21 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
             db_res = str(b.get('result', '')).strip().upper()
             db_net = float(b['net']) if pd.notna(b['net']) and str(b['net']).strip() != '' else 0
             stake = float(b['stake'])
-            odds = float(b['odds'])
-            pot_win = (stake * odds) - stake
+            
+            # Boost Check
+            c_odds = float(b['odds'])
+            if str(b.get('chip_used', '')) == 'BOOST': c_odds += 1.0
+
+            pot_win = (stake * c_odds) - stake
             dream_profit[user] += int(pot_win)
             pnl = 0
             is_inplay = False
-            if db_res in ['WIN', 'LOSE']: pnl = db_net
+            
+            # If shield is active, everything is 0
+            is_shielded = bool(b.get('bm_shield', False))
+
+            if db_res in ['WIN', 'LOSE', 'VOID']: pnl = db_net
+            elif is_shielded: pnl = 0 # Future shield simulation if data lagged
             else:
                 status = str(b.get('match_status', 'SCHEDULED')).strip().upper()
                 if status not in ['SCHEDULED', 'TIMED', 'POSTPONED', 'FINISHED']:
@@ -346,10 +406,13 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
                     if b['pick'] == curr_outcome: pnl = pot_win
                     else: pnl = -stake
                     is_inplay = True
+            
             gw_total_pnl[user] += int(pnl)
-            if current_bm and current_bm in gw_total_pnl and current_bm != user:
+            # BM Logic: Shielded = No impact
+            if not is_shielded and current_bm and current_bm in gw_total_pnl and current_bm != user:
                 gw_total_pnl[current_bm] -= int(pnl)
-            if is_inplay:
+            
+            if is_inplay and not is_shielded:
                 inplay_sim_only[user] += int(pnl)
                 if current_bm and current_bm in inplay_sim_only and current_bm != user:
                     inplay_sim_only[current_bm] -= int(pnl)
@@ -451,7 +514,7 @@ def main():
             settle_bets_date_aware()
             st.session_state['v83_api_synced'] = True
     
-    bets, odds, results, bm_log, users, config = fetch_all_data()
+    bets, odds, results, bm_log, users, config, user_chips = fetch_all_data()
     if users.empty: st.warning("User data missing."); st.stop()
 
     if 'user' not in st.session_state or not st.session_state['user']:
@@ -486,11 +549,22 @@ def main():
     is_bm = (me == current_bm)
     lock_mins = get_config_value(config, "lock_minutes_before_earliest", 60)
     
-    budget_limit = get_config_value(config, "max_total_stake_per_gw", 20000)
-    current_spend = 0
+    # --- BUDGET LOGIC (LIMIT BREAKER AWARE) ---
+    base_budget = get_config_value(config, "max_total_stake_per_gw", 8000) # Default 8000
+    
+    # Check if I used LIMIT BREAKER in this GW already
+    my_gw_bets = pd.DataFrame()
     if not bets.empty:
         my_gw_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw)]
-        current_spend = int(my_gw_bets['stake'].sum()) if not my_gw_bets.empty else 0
+    
+    has_limit_breaker = False
+    if not my_gw_bets.empty and 'chip_used' in my_gw_bets.columns:
+        if 'LIMIT' in my_gw_bets['chip_used'].unique():
+            has_limit_breaker = True
+    
+    # If LIMIT used in this GW, cap is 20,000. Else 8,000.
+    budget_limit = 20000 if has_limit_breaker else base_budget
+    current_spend = int(my_gw_bets['stake'].sum()) if not my_gw_bets.empty else 0
     
     # Sidebar
     st.sidebar.markdown(f"## {me}")
@@ -499,11 +573,21 @@ def main():
     bal = my_stat['balance']
     col = "#4ade80" if bal >= 0 else "#f87171"
     st.sidebar.markdown(f"<div style='font-size:1.8rem; font-weight:800; color:{col}; font-family:monospace'>¥{bal:,}</div>", unsafe_allow_html=True)
+    
+    # V8.5 Chip Display in Sidebar
+    if not user_chips.empty:
+        my_chips = user_chips[user_chips['user_name'] == me]
+        chip_counts = {r['chip_type']: r['amount'] for _, r in my_chips.iterrows()}
+        c_boost = chip_counts.get('BOOST', 0)
+        c_limit = chip_counts.get('LIMIT', 0)
+        c_shield = chip_counts.get('SHIELD', 0)
+        st.sidebar.markdown(f"**Chips:** 🚀x{c_boost} 🔓x{c_limit} 🛡️x{c_shield}")
+
     if st.sidebar.button("Logout"): st.session_state['user'] = None; st.rerun()
 
-    t1, t2, t3, t4, t5 = st.tabs(["MATCHES", "LIVE", "HISTORY", "DASHBOARD", "ADMIN"])
+    t1, t2, t3, t4, t5, t6 = st.tabs(["MATCHES", "LIVE", "HISTORY", "DASHBOARD", "ADMIN", "CHIPS"])
 
-    # --- TAB 1: MATCHES (V8.2: V7.2+AI+Lock) ---
+    # --- TAB 1: MATCHES (V8.5: + Chips) ---
     with t1:
         c_h1, c_h2 = st.columns([3, 1])
         c_h1.markdown(f"### {target_gw}")
@@ -550,12 +634,22 @@ def main():
                         for _, b in match_bets.iterrows():
                             me_cls = "me" if b['user'] == me else ""
                             pick_txt = b['pick'][:4]
+                            
+                            # Chip Badge
+                            c_u = str(b.get('chip_used', '')).strip()
+                            c_html = ""
+                            if c_u == 'BOOST': c_html = "<span class='chip-tag chip-boost'>🚀BOOST</span>"
+                            if c_u == 'LIMIT': c_html = "<span class='chip-tag chip-limit'>🔓LIMIT</span>"
+                            
                             pnl_span = ""
                             db_res = str(b.get('result', '')).strip().upper()
                             db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
+                            
                             if db_res == 'WIN': pnl_span = f"<span class='bb-res-win'>+¥{int(db_net):,}</span>"
                             elif db_res == 'LOSE': pnl_span = f"<span class='bb-res-lose'>-¥{int(abs(db_net)):,}</span>"
-                            badges += f"""<div class="bet-badge {me_cls}"><span>{b['user']}:</span><span class="bb-pick">{pick_txt}</span> (¥{int(b['stake']):,}){pnl_span}</div>"""
+                            elif db_res == 'VOID': pnl_span = f"<span class='bb-void'>VOID</span>"
+                            
+                            badges += f"""<div class="bet-badge {me_cls}"><span>{b['user']}:</span><span class="bb-pick">{pick_txt}</span> (¥{int(b['stake']):,}){c_html}{pnl_span}</div>"""
                     if badges: card_html += f"""<div class="social-bets-container">{badges}</div>"""
                     card_html += "</div>"
                     st.markdown(card_html, unsafe_allow_html=True)
@@ -576,21 +670,67 @@ def main():
                             cur_s = int(my_bet.iloc[0]['stake']) if not my_bet.empty else 1000
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
+                            
+                            # --- V8.5 CHIP SELECTOR ---
+                            # Check inventory
+                            my_chip_inv = user_chips[user_chips['user_name'] == me]
+                            inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
+                            
+                            # Build options
+                            chip_opts = ["None"]
+                            if inv.get('BOOST', 0) > 0: chip_opts.append("🚀 ODDS BOOST (+1.0 Odds)")
+                            if inv.get('LIMIT', 0) > 0: chip_opts.append("🔓 LIMIT BREAKER (Limit 20k)")
+                            
+                            sel_chip_str = st.radio("Use Chip?", chip_opts, horizontal=True, key=f"chp_{mid}", label_visibility="collapsed")
+                            
+                            # Explain text for simple users
+                            if "BOOST" in sel_chip_str:
+                                st.caption("💡 **効果:** オッズが+1.0倍されます。勝てば大儲けですが、負けたらチップの無駄遣いです。")
+                            elif "LIMIT" in sel_chip_str:
+                                st.caption("💡 **効果:** このGWの予算上限が20,000円に解放されます。「絶対勝てる」時だけ使いましょう。")
+                            else:
+                                st.caption("💡 チップを使わず通常ベットします。")
+
+                            # Logic for budget check
+                            temp_limit = budget_limit
+                            if "LIMIT" in sel_chip_str: temp_limit = 20000
+                            
                             new_total = current_spend - (int(my_bet.iloc[0]['stake']) if not my_bet.empty else 0) + stake
-                            over_budget = new_total > budget_limit
+                            over_budget = new_total > temp_limit
+                            
                             if c_b.form_submit_button("BET", use_container_width=True):
-                                if over_budget: st.error(f"Over Budget! Limit: ¥{budget_limit:,}")
+                                if over_budget: st.error(f"Over Budget! Limit: ¥{temp_limit:,}")
                                 else:
                                     to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
+                                    
+                                    # Extract Chip Code
+                                    final_chip = None
+                                    if "BOOST" in sel_chip_str: final_chip = "BOOST"
+                                    if "LIMIT" in sel_chip_str: final_chip = "LIMIT"
+                                    
+                                    # Update Inventory if Chip Used (Decrease)
+                                    if final_chip:
+                                        # Only decrease if new bet, or changing chip. (Simplification: Just decrease, Admin can fix if error.
+                                        # Strict logic: Check if I already used a chip on this match?)
+                                        # V8.5 Strict: One chip per match.
+                                        
+                                        # Decrement DB
+                                        curr_amt = inv.get(final_chip, 0)
+                                        if curr_amt > 0:
+                                            supabase.table("user_chips").update({"amount": curr_amt - 1}).match({"user_name": me, "chip_type": final_chip}).execute()
+                                        else:
+                                            st.error("Not enough chips!"); st.stop()
+                                    
                                     pl = {
                                         "key": f"{m['gw']}:{me}:{mid}", "gw": m['gw'], "user": me, 
                                         "match_id": int(mid), "match": f"{m['home']} vs {m['away']}", 
                                         "pick": pick, "stake": stake, "odds": to, 
                                         "placed_at": datetime.datetime.now(JST).isoformat(), 
-                                        "status": "OPEN", "result": "", "payout": 0, "net": 0
+                                        "status": "OPEN", "result": "", "payout": 0, "net": 0,
+                                        "chip_used": final_chip
                                     }
                                     supabase.table("bets").upsert(pl).execute()
-                                    st.toast(f"Bet Placed @ {to}", icon="✅"); time.sleep(1); st.rerun()
+                                    st.toast(f"Bet Placed @ {to} (Chip: {final_chip})", icon="✅"); time.sleep(1); st.rerun()
             else: st.info(f"No matches for {target_gw}")
         else: st.info("Loading...")
 
@@ -623,6 +763,11 @@ def main():
             for _, m in lm.iterrows():
                 sts_disp = m['status']
                 if m['status'] in ['IN_PLAY', 'PAUSED']: sts_disp = f"<span class='live-dot'>●</span> {m['status']}"
+                
+                # Check Shield
+                is_shielded = bool(m.get('bm_shield', False))
+                if is_shielded: sts_disp += " <span style='color:#aaa; font-weight:bold'>[🛡️VOIDED]</span>"
+
                 mb = bets[bets['match_id'] == m['match_id']] if not bets.empty else pd.DataFrame()
                 stake_str = ""
                 
@@ -636,25 +781,40 @@ def main():
                         pnl_col = "#aaa"
                         db_res = str(b.get('result', '')).strip().upper()
                         db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
+                        
+                        # Chip Icon
+                        c_u = str(b.get('chip_used', '')).strip()
+                        c_icon = ""
+                        if c_u == 'BOOST': c_icon = "🚀"
+                        if c_u == 'LIMIT': c_icon = "🔓"
+                        
                         if db_res in ['WIN', 'LOSE']:
                             sign = "+" if db_net > 0 else ""
                             pnl_col = "#4ade80" if db_net > 0 else "#f87171"
                             pnl_display = f"→ <span style='color:{pnl_col}'>{sign}¥{int(db_net):,}</span>"
-                        elif m['status'] in ['IN_PLAY', 'PAUSED']:
+                        elif db_res == 'VOID':
+                             pnl_display = f"→ <span style='color:#aaa'>REFUND</span>"
+                        elif m['status'] in ['IN_PLAY', 'PAUSED'] and not is_shielded:
                             h_s = int(m['home_score']) if pd.notna(m['home_score']) else 0
                             a_s = int(m['away_score']) if pd.notna(m['away_score']) else 0
                             curr = "DRAW"
                             if h_s > a_s: curr = "HOME"
                             elif a_s > h_s: curr = "AWAY"
                             is_winning = (pick == curr)
-                            pot_net = (stake * float(b['odds'])) - stake if is_winning else -stake
+                            
+                            c_odds = float(b['odds'])
+                            if c_u == 'BOOST': c_odds += 1.0
+                            
+                            pot_net = (stake * c_odds) - stake if is_winning else -stake
                             sign = "+" if pot_net > 0 else ""
                             pnl_col = "#4ade80" if pot_net > 0 else "#f87171"
                             pnl_display = f"→ <span style='color:{pnl_col}'>{sign}¥{int(pot_net):,}</span>"
                         else:
-                            pot_win = (stake * float(b['odds'])) - stake
+                            c_odds = float(b['odds'])
+                            if c_u == 'BOOST': c_odds += 1.0
+                            pot_win = (stake * c_odds) - stake
                             pnl_display = f"→ <span style='color:#666; font-size:0.7rem'>+¥{int(pot_win):,}?</span>"
-                        badges_html.append(f"<div><span style='font-weight:bold'>{u_name}:</span> {pick} <span style='font-family:monospace; opacity:0.7'>(¥{stake:,})</span> {pnl_display}</div>")
+                        badges_html.append(f"<div><span style='font-weight:bold'>{u_name}:</span> {pick} <span style='font-family:monospace; opacity:0.7'>(¥{stake:,}){c_icon}</span> {pnl_display}</div>")
                     stake_str = "<div style='display:flex; flex-direction:column; align-items:flex-end; font-size:0.75rem; gap:2px;'>" + "".join(badges_html) + "</div>"
                 
                 st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05);"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><div style='display:flex; align-items:center'>{sts_disp}</div>{stake_str}</div></div>""", unsafe_allow_html=True)
@@ -700,15 +860,34 @@ def main():
             st.markdown("---") 
             for _, b in hist.iterrows():
                 db_res = str(b.get('result', '')).strip().upper()
-                if db_res not in ['WIN', 'LOSE']: db_res = 'PENDING'
+                if db_res not in ['WIN', 'LOSE', 'VOID']: db_res = 'PENDING'
                 db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
-                cls = "h-win" if db_res == 'WIN' else ("h-lose" if db_res == 'LOSE' else "")
-                pnl = "PENDING"
-                col = "#aaa"
-                if db_res == 'WIN': pnl, col = f"+¥{int(db_net):,}", "#4ade80"
-                elif db_res == 'LOSE': pnl, col = f"-¥{int(abs(db_net)):,}", "#f87171"
+                
+                cls = "h-win"
+                col = "#4ade80"
+                pnl = f"+¥{int(db_net):,}"
+                
+                if db_res == 'LOSE': 
+                    cls = "h-lose"
+                    col = "#f87171"
+                    pnl = f"-¥{int(abs(db_net)):,}"
+                elif db_res == 'VOID':
+                    cls = "h-void"
+                    col = "#aaa"
+                    pnl = "REFUND"
+                elif db_res == 'PENDING':
+                    cls = ""
+                    col = "#aaa"
+                    pnl = "PENDING"
+                
+                # Chip Icon
+                c_u = str(b.get('chip_used', '')).strip()
+                c_icon = ""
+                if c_u == 'BOOST': c_icon = "🚀"
+                if c_u == 'LIMIT': c_icon = "🔓"
+
                 match_name = f"{b['home']} vs {b['away']}" if pd.notna(b['home']) else b.get('match', 'Unknown')
-                st.markdown(f"""<div class="hist-card {cls}"><div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace"><span>{b['user']} | {b['gw']}</span><span style="color:{col}; font-weight:bold;">{pnl}</span></div><div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div><div style="font-size:0.8rem; opacity:0.8"><span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> <span style="opacity:0.6">(@{b['odds']})</span><span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span></div></div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="hist-card {cls}"><div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace"><span>{b['user']} | {b['gw']}</span><span style="color:{col}; font-weight:bold;">{pnl}</span></div><div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div><div style="font-size:0.8rem; opacity:0.8"><span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> <span style="opacity:0.6">(@{b['odds']}){c_icon}</span><span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span></div></div>""", unsafe_allow_html=True)
         else: st.info("No history.")
 
     # --- TAB 4: DASHBOARD (V5.9.3 Restored) ---
@@ -767,6 +946,16 @@ def main():
                     clean_old_data(target_season)
                     sync_api(token, target_season)
                     st.success("Database Repaired & Synced!"); time.sleep(1); st.rerun()
+
+            # --- V8.5 ADMIN CHIP INIT ---
+            st.write("---")
+            st.markdown("#### 💎 CHIP INITIALIZATION (Admin Only)")
+            if st.button("INIT ALL USERS CHIPS (2 each)"):
+                for usr in users['username'].unique():
+                    supabase.table("user_chips").upsert({"user_name": usr, "chip_type": "BOOST", "amount": 2}).execute()
+                    supabase.table("user_chips").upsert({"user_name": usr, "chip_type": "LIMIT", "amount": 2}).execute()
+                    supabase.table("user_chips").upsert({"user_name": usr, "chip_type": "SHIELD", "amount": 2}).execute()
+                st.success("Distributed 2 chips of each type to all users.")
             
             st.write("---")
             st.markdown("#### ODDS EDITOR (Manual)")
@@ -851,6 +1040,111 @@ def main():
                     if st.form_submit_button("Assign"):
                         supabase.table("bm_log").upsert({"gw": t_gw, "bookmaker": t_u}).execute()
                         st.success("Assigned"); time.sleep(1); st.rerun()
+
+    # --- TAB 6: CHIPS (V8.5 NEW) ---
+    with t6:
+        st.markdown("### 💎 ARMORY (Tactical Chips)")
+        
+        # 1. Inventory
+        st.markdown("#### 🎒 YOUR INVENTORY")
+        if not user_chips.empty:
+            my_chips = user_chips[user_chips['user_name'] == me]
+            if not my_chips.empty:
+                cols = st.columns(3)
+                inv_map = {r['chip_type']: r['amount'] for _, r in my_chips.iterrows()}
+                
+                with cols[0]:
+                    st.metric("🚀 ODDS BOOST", f"x{inv_map.get('BOOST', 0)}")
+                    st.caption("オッズを+1.0倍する。勝負所で使え。")
+                with cols[1]:
+                    st.metric("🔓 LIMIT BREAKER", f"x{inv_map.get('LIMIT', 0)}")
+                    st.caption("予算上限を20,000円にする。全ツッパ用。")
+                with cols[2]:
+                    st.metric("🛡️ BM SHIELD", f"x{inv_map.get('SHIELD', 0)}")
+                    st.caption("自分がBMの試合を無効にする。大負けした時用。")
+            else:
+                st.info("No chips found. Ask Admin to Initialize.")
+        
+        st.divider()
+
+        # 2. BM SHIELD CONSOLE
+        st.markdown("#### 🛡️ BM SHIELD ACTIVATION CONSOLE")
+        st.info("💡 **説明:** あなたがBookmakerを担当した試合で大負けした場合、ここから試合を「無効試合（ノーゲーム）」にできます。全員に賭け金が返金されます。ただし、**「誰かがチップを使った試合」**には発動できません。")
+        
+        # Logic: Find matches where: 
+        # 1. me == BM (check bm_log)
+        # 2. status == FINISHED
+        # 3. bm_shield == FALSE
+        # 4. next GW hasn't started (Simplified: just show all eligible for now)
+        
+        # Get my BM GWs
+        my_bm_gws = []
+        if not bm_log.empty:
+            my_bm_gws = bm_log[bm_log['bookmaker'] == me]['gw'].tolist()
+        
+        if my_bm_gws and not results.empty:
+            # Filter results
+            candidates = results[
+                (results['gw'].isin(my_bm_gws)) & 
+                (results['status'] == 'FINISHED') & 
+                ((results['bm_shield'] == False) | (pd.isna(results['bm_shield'])))
+            ].copy()
+            
+            if not candidates.empty:
+                candidates['dt_jst'] = candidates['utc_kickoff'].apply(to_jst)
+                candidates = candidates.sort_values('dt_jst', ascending=False)
+                
+                found_candidate = False
+                for _, m in candidates.iterrows():
+                    mid = m['match_id']
+                    m_name = f"{m['home']} vs {m['away']}"
+                    
+                    # Check if ANY chip used in this match
+                    m_bets = bets[bets['match_id'] == mid]
+                    chips_used_in_match = []
+                    if not m_bets.empty:
+                         chips_used_in_match = m_bets[m_bets['chip_used'] != ""].shape[0]
+                    
+                    is_dirty = (chips_used_in_match > 0)
+                    
+                    # Calculate My Loss (approx)
+                    # Actually we can just show the match and let BM decide
+                    
+                    with st.expander(f"{m['gw']}: {m_name} ({m['home_score']}-{m['away_score']})", expanded=True):
+                        c1, c2 = st.columns([3, 1])
+                        with c1:
+                            if is_dirty:
+                                st.warning(f"⚠️ Cannot Shield: {chips_used_in_match} players used chips in this match.")
+                            else:
+                                st.success("✅ Eligible for Shield")
+                        
+                        with c2:
+                            # Check Shield Inventory
+                            shield_count = 0
+                            if not user_chips.empty:
+                                u_row = user_chips[(user_chips['user_name'] == me) & (user_chips['chip_type'] == 'SHIELD')]
+                                if not u_row.empty: shield_count = int(u_row.iloc[0]['amount'])
+                            
+                            if is_dirty:
+                                st.button("🚫 LOCKED", key=f"sh_lk_{mid}", disabled=True)
+                            elif shield_count <= 0:
+                                st.button("🚫 NO CHIPS", key=f"sh_nc_{mid}", disabled=True)
+                            else:
+                                if st.button("🛡️ ACTIVATE", key=f"sh_act_{mid}", type="primary"):
+                                    # 1. Update Result
+                                    supabase.table("result").update({"bm_shield": True}).eq("match_id", mid).execute()
+                                    # 2. Decrement Chip
+                                    supabase.table("user_chips").update({"amount": shield_count - 1}).match({"user_name": me, "chip_type": "SHIELD"}).execute()
+                                    # 3. Settle
+                                    settle_bets_date_aware()
+                                    st.success("SHIELD ACTIVATED! Match Voided."); time.sleep(2); st.rerun()
+                    found_candidate = True
+                
+                if not found_candidate: st.info("No eligible matches found.")
+            else:
+                st.info("No finished matches found where you are BM.")
+        else:
+             st.info("You haven't been a BM yet.")
 
 if __name__ == "__main__":
     main()
