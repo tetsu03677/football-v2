@@ -13,9 +13,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (V9.0 Final Polish)
+# 0. System Configuration & CSS (V9.1 Undo & Polish)
 # ==============================================================================
-st.set_page_config(page_title="Football App V9.0", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V9.1", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -89,7 +89,7 @@ st.markdown("""
     /* Section Headers */
     .section-header { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; margin-top: 20px; margin-bottom: 12px; border-left: 4px solid #fbbf24; padding-left: 10px; text-transform: uppercase; letter-spacing: 1px; color: #fff; }
 
-    /* Inventory Cards (Refined V9) */
+    /* Inventory Cards */
     .chip-inventory-card {
         background: rgba(255,255,255,0.03); 
         border: none;
@@ -98,21 +98,11 @@ st.markdown("""
         height: 100%;
         display: flex;
         flex-direction: column;
-        /* Bottom spacing for mobile */
         margin-bottom: 20px; 
     }
-    
-    /* Header Row: Icon + Title */
-    .chip-header-row {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        margin-bottom: 8px;
-    }
+    .chip-header-row { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; }
     .chip-inv-icon { font-size: 1.6rem; margin: 0; line-height: 1; }
     .chip-inv-name { font-weight: 800; font-size: 0.95rem; color: #fff; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
-    
     .chip-inv-count { font-family: 'Courier New', monospace; font-size: 1.8rem; font-weight: 800; color: #fbbf24; margin-bottom: 12px; line-height:1; }
     .chip-inv-desc { font-size: 0.75rem; opacity: 0.7; line-height: 1.4; min-height: 3.2em; text-align: left; }
     
@@ -161,7 +151,6 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        # Bets table includes dummy bets for Limit Breaker (match_id=999999)
         bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','payout','net','gw','placed_at','chip_used'])
         odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
         results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score','bm_shield'])
@@ -170,14 +159,12 @@ def fetch_all_data():
         config = get_df_safe("config", ['key','value'])
         user_chips = get_df_safe("user_chips", ['user_name','chip_type','amount'])
         
-        # Filter standard matches from bets, but keep 999999 for Limit Breaker logic
         if not bets.empty:
             bets['pick'] = bets['pick'].astype(str).str.strip().str.upper()
             bets['gw'] = bets['gw'].astype(str).str.strip().str.upper()
             bets['result'] = bets['result'].astype(str).str.strip().str.upper().replace({'NONE': '', 'NAN': ''})
             bets['net'] = pd.to_numeric(bets['net'], errors='coerce').fillna(0)
             bets['chip_used'] = bets['chip_used'].fillna("")
-            # Don't filter out match_id 999999 here, handle in UI logic
         
         if not results.empty:
             results['status'] = results['status'].astype(str).str.strip().str.upper()
@@ -264,8 +251,9 @@ def settle_bets_date_aware():
         if not b_res.data or not r_res.data: return 0, "No data"
         df_b = pd.DataFrame(b_res.data)
         df_r = pd.DataFrame(r_res.data)
-        # Filter out Limit Breaker dummy bets (match_id=999999)
+        
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
+        # Exclude dummy bets for settlement
         df_b = df_b[df_b['match_id'] != '999999'] 
         
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
@@ -289,26 +277,18 @@ def settle_bets_date_aware():
             if m_status == 'FINISHED':
                 h_s = int(row['home_score'])
                 a_s = int(row['away_score'])
-                
-                # --- CHIP LOGIC: BM SHIELD ---
                 is_void = bool(row.get('bm_shield', False))
-                
                 outcome = "DRAW"
                 if h_s > a_s: outcome = "HOME"
                 elif a_s > h_s: outcome = "AWAY"
-                
                 bet_pick = str(row['pick']).strip().upper()
                 final_res = 'WIN' if bet_pick == outcome else 'LOSE'
-                
                 if is_void: final_res = 'VOID'
-                
                 stake = float(row['stake']) if row['stake'] else 0
                 
-                # --- CHIP LOGIC: ODDS BOOST ---
                 base_odds = float(row['odds']) if row['odds'] else 1.0
                 chip_used = str(row.get('chip_used', '')).strip()
-                if chip_used == 'BOOST':
-                    base_odds += 1.0
+                if chip_used == 'BOOST': base_odds += 1.0
                 
                 if final_res == 'WIN':
                     payout = int(stake * base_odds)
@@ -360,9 +340,7 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
             if nums: bm_map[f"GW{nums}"] = r['bookmaker']
     if bets_df.empty: return stats, bm_map
     
-    # Filter dummy bets
     bets_clean = bets_df[bets_df['match_id'] != '999999'].copy()
-    
     results_safe = results_df.rename(columns={'status': 'match_status'})
     merged = pd.merge(bets_clean, results_safe[['match_id', 'match_status', 'home_score', 'away_score', 'bm_shield']], on='match_id', how='left')
     for _, b in merged.iterrows():
@@ -415,7 +393,6 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
     dream_profit = {u: 0 for u in users_df['username'].unique()}
     inplay_sim_only = {u: 0 for u in users_df['username'].unique()}
     
-    # Filter dummy
     bets_clean = bets_df[bets_df['match_id'] != '999999'].copy()
     gw_bets = bets_clean[bets_clean['gw'] == target_gw].copy() if not bets_clean.empty else pd.DataFrame()
     
@@ -437,7 +414,6 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
             dream_profit[user] += int(pot_win)
             pnl = 0
             is_inplay = False
-            
             is_shielded = bool(b.get('bm_shield', False))
 
             if db_res in ['WIN', 'LOSE', 'VOID']: pnl = db_net
@@ -607,14 +583,13 @@ def main():
     # --- BUDGET LOGIC (LIMIT BREAKER AWARE) ---
     base_budget = get_config_value(config, "max_total_stake_per_gw", 8000)
     
-    # Check Limit Breaker status via dummy bets
+    # Check Limit Breaker status
     my_gw_bets = pd.DataFrame()
     active_breakers = []
     if not bets.empty:
         lb_bets = bets[(bets['gw'] == target_gw) & (bets['chip_used'] == 'LIMIT') & (bets['match_id'] == '999999')]
         if not lb_bets.empty:
             active_breakers = lb_bets['user'].unique().tolist()
-        
         my_gw_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw) & (bets['match_id'] != '999999')]
     
     has_limit_breaker = (me in active_breakers)
@@ -629,14 +604,6 @@ def main():
     col = "#4ade80" if bal >= 0 else "#f87171"
     st.sidebar.markdown(f"<div style='font-size:1.8rem; font-weight:800; color:{col}; font-family:monospace'>¥{bal:,}</div>", unsafe_allow_html=True)
     
-    if not user_chips.empty:
-        my_chips = user_chips[user_chips['user_name'] == me]
-        chip_counts = {r['chip_type']: r['amount'] for _, r in my_chips.iterrows()}
-        c_boost = chip_counts.get('BOOST', 0)
-        c_limit = chip_counts.get('LIMIT', 0)
-        c_shield = chip_counts.get('SHIELD', 0)
-        st.sidebar.markdown(f"**Chips:** ⚡x{c_boost} 💎x{c_limit} 🛡️x{c_shield}")
-
     if st.sidebar.button("Logout"): st.session_state['user'] = None; st.rerun()
 
     t1, t2, t3, t4, t5, t6 = st.tabs(["MATCHES", "LIVE", "HISTORY", "DASHBOARD", "ADMIN", "CHIPS"])
@@ -648,7 +615,6 @@ def main():
         if is_bm: c_h2.markdown(f"<span class='bm-badge'>YOU ARE BM</span>", unsafe_allow_html=True)
         else: c_h2.markdown(f"<span class='bm-badge'>BM: {current_bm}</span>", unsafe_allow_html=True)
         
-        # High Rollers Banner
         if active_breakers:
             breakers_str = ", ".join(active_breakers)
             st.markdown(f"<div class='high-roller-banner'>🔥 HIGH ROLLERS (LIMIT 20k): {breakers_str}</div>", unsafe_allow_html=True)
@@ -697,7 +663,6 @@ def main():
                             c_u = str(b.get('chip_used', '')).strip()
                             c_html = ""
                             if c_u == 'BOOST': c_html = "<span class='chip-tag chip-boost'>⚡BOOST</span>"
-                            # LIMIT is not shown per match anymore, it's global
                             
                             pnl_span = ""
                             db_res = str(b.get('result', '')).strip().upper()
@@ -729,14 +694,23 @@ def main():
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
                             
-                            # --- Chip Selector (Boost Only, Clean UI) ---
+                            # --- Chip Selector (Boost Only, Clean UI with Undo Logic) ---
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
                             
-                            chip_opts = ["通常"]
-                            if inv.get('BOOST', 0) > 0: chip_opts.append("ODDS BOOST")
+                            # Determine existing chip usage for this match
+                            current_chip_used = str(my_bet.iloc[0]['chip_used']).strip() if not my_bet.empty else ""
                             
-                            sel_chip_str = st.radio("オプション", chip_opts, horizontal=True, key=f"chp_{mid}", label_visibility="collapsed")
+                            # Build Options
+                            # If already BOOST, default to BOOST. If user switches to Normal, we refund.
+                            chip_opts = ["通常", "ODDS BOOST"]
+                            
+                            default_idx = 0
+                            if current_chip_used == 'BOOST': default_idx = 1
+                            
+                            sel_chip_str = st.radio("オプション", chip_opts, index=default_idx, horizontal=True, key=f"chp_{mid}", label_visibility="collapsed")
+                            
+                            if "BOOST" in sel_chip_str: st.caption("⚡ **効果:** オッズ+1.0倍 / **コスト:** 1枚")
                             
                             new_total = current_spend - (int(my_bet.iloc[0]['stake']) if not my_bet.empty else 0) + stake
                             over_budget = new_total > budget_limit
@@ -745,14 +719,23 @@ def main():
                                 if over_budget: st.error(f"予算オーバーです！ 上限: ¥{budget_limit:,}")
                                 else:
                                     to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
-                                    final_chip = "BOOST" if "BOOST" in sel_chip_str else None
+                                    final_chip = "BOOST" if "BOOST" in sel_chip_str else ""
                                     
-                                    if final_chip:
-                                        curr_amt = inv.get(final_chip, 0)
+                                    # --- UNDO / CONSUME LOGIC ---
+                                    # 1. Boost -> Normal (Refund)
+                                    if current_chip_used == 'BOOST' and final_chip == "":
+                                        supabase.table("user_chips").update({"amount": inv.get('BOOST', 0) + 1}).match({"user_name": me, "chip_type": "BOOST"}).execute()
+                                        st.toast("Boost Removed. Chip Refunded.")
+                                    
+                                    # 2. Normal -> Boost (Consume)
+                                    elif current_chip_used == "" and final_chip == 'BOOST':
+                                        curr_amt = inv.get('BOOST', 0)
                                         if curr_amt > 0:
-                                            supabase.table("user_chips").update({"amount": curr_amt - 1}).match({"user_name": me, "chip_type": final_chip}).execute()
+                                            supabase.table("user_chips").update({"amount": curr_amt - 1}).match({"user_name": me, "chip_type": "BOOST"}).execute()
                                         else:
                                             st.error("チップが足りません！"); st.stop()
+                                    
+                                    # 3. Boost -> Boost / Normal -> Normal (No change)
                                     
                                     pl = {
                                         "key": f"{m['gw']}:{me}:{mid}", "gw": m['gw'], "user": me, 
@@ -989,15 +972,28 @@ def main():
                         <div class="chip-inv-count">x{inv_map.get('LIMIT', 0)}</div>
                         <div class="chip-inv-desc">このGWの予算上限を20,000円に拡張する。</div>
                     </div>""", unsafe_allow_html=True)
-                    # LIMIT BREAKER ACTION (Inside the same container for alignment)
+                    # LIMIT BREAKER ACTION (Undo Logic)
                     is_active = has_limit_breaker
-                    btn_disabled = (inv_map.get('LIMIT', 0) <= 0) or is_active
-                    btn_label = "✅ 解放中" if is_active else ("発動する" if not btn_disabled else "在庫なし")
-                    if st.button(btn_label, key="limit_btn", disabled=btn_disabled, use_container_width=True):
-                        pl = {"key": f"{target_gw}:{me}:LIMIT", "gw": target_gw, "user": me, "match_id": 999999, "pick": "LIMIT_BREAKER", "stake": 0, "chip_used": "LIMIT"}
-                        supabase.table("bets").upsert(pl).execute()
-                        supabase.table("user_chips").update({"amount": inv_map.get('LIMIT') - 1}).match({"user_name": me, "chip_type": "LIMIT"}).execute()
-                        st.success("LIMIT BREAKER ACTIVATED!"); time.sleep(1.0); st.rerun()
+                    btn_disabled = False
+                    
+                    if is_active:
+                        # Logic to check if user can Undo (must not exceed 8000)
+                        can_undo = (current_spend <= 8000)
+                        if st.button("❌ 解除する (Undo)", disabled=not can_undo, use_container_width=True):
+                            supabase.table("bets").delete().eq("key", f"{target_gw}:{me}:LIMIT").execute()
+                            supabase.table("user_chips").update({"amount": inv_map.get('LIMIT') + 1}).match({"user_name": me, "chip_type": "LIMIT"}).execute()
+                            st.success("LIMIT BREAKER DEACTIVATED"); time.sleep(1.0); st.rerun()
+                        if not can_undo:
+                            st.caption("⚠️ 使用額が8,000円超のため解除不可")
+                    else:
+                        if inv_map.get('LIMIT', 0) > 0:
+                            if st.button("発動する", use_container_width=True):
+                                pl = {"key": f"{target_gw}:{me}:LIMIT", "gw": target_gw, "user": me, "match_id": 999999, "pick": "LIMIT_BREAKER", "stake": 0, "chip_used": "LIMIT"}
+                                supabase.table("bets").upsert(pl).execute()
+                                supabase.table("user_chips").update({"amount": inv_map.get('LIMIT') - 1}).match({"user_name": me, "chip_type": "LIMIT"}).execute()
+                                st.success("ACTIVATED!"); time.sleep(1.0); st.rerun()
+                        else:
+                            st.button("在庫なし", disabled=True, use_container_width=True)
 
             with c3:
                 with st.container(border=True):
@@ -1031,7 +1027,7 @@ def main():
         my_bm_gws = bm_log[bm_log['bookmaker'] == me]['gw'].tolist() if not bm_log.empty else []
         
         if my_bm_gws and not results.empty:
-            candidates_all = results[(results['gw'].isin(my_bm_gws)) & (results['status'] == 'FINISHED') & ((results['bm_shield'] == False) | (pd.isna(results['bm_shield'])))].copy()
+            candidates_all = results[(results['gw'].isin(my_bm_gws)) & (results['status'] == 'FINISHED')].copy()
             if not candidates_all.empty:
                 candidates_all['gw_num'] = candidates_all['gw'].apply(extract_gw_num)
                 latest_gw_num = candidates_all['gw_num'].max()
@@ -1082,7 +1078,12 @@ def main():
 
                             with c3:
                                 if is_shielded:
-                                    st.button("済", key=f"sh_done_{mid}", disabled=True)
+                                    # UNDO LOGIC FOR SHIELD
+                                    if st.button("↩️ 解除", key=f"sh_undo_{mid}", type="secondary", use_container_width=True):
+                                        supabase.table("result").update({"bm_shield": False}).eq("match_id", mid).execute()
+                                        supabase.table("user_chips").update({"amount": shield_count + 1}).match({"user_name": me, "chip_type": "SHIELD"}).execute()
+                                        settle_bets_date_aware()
+                                        st.success("解除しました。"); time.sleep(1.0); st.rerun()
                                 elif is_dirty or is_expired:
                                     st.button("🔒", key=f"sh_lk_{mid}", disabled=True)
                                 elif shield_count <= 0:
