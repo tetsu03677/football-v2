@@ -1,3 +1,4 @@
+# [2025-12-22] 1行目に配置先とファイル名を必ずコメントアウトで記載してください。
 # app.py
 import streamlit as st
 import pandas as pd
@@ -811,6 +812,9 @@ def main():
                         curr_status = target_m['status']
                         curr_h = int(target_m['home_score']) if pd.notna(target_m['home_score']) else 0
                         curr_a = int(target_m['away_score']) if pd.notna(target_m['away_score']) else 0
+                        
+                        # --- V8.5 EXPLICIT DISPLAY ---
+                        st.markdown(f"**Current DB State:** Status: `{curr_status}` | Score: `{curr_h} - {curr_a}`")
                         
                         c1, c2, c3 = st.columns(3)
                         # Status Selector
