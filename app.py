@@ -23,7 +23,7 @@ st.markdown("""
     /* Layout & Base */
     .block-container { padding-top: 4.5rem; padding-bottom: 6rem; max-width: 100%; padding-left: 0.5rem; padding-right: 0.5rem; }
     
-    /* Cards (V6/V7 Rich Style for Matches/Live) */
+    /* Cards */
     .app-card-top { border: 1px solid rgba(255,255,255,0.1); border-bottom: none; border-radius: 12px 12px 0 0; padding: 20px 16px 10px 16px; background: rgba(255,255,255,0.03); margin-bottom: 0px; }
     [data-testid="stForm"] { border: 1px solid rgba(255,255,255,0.1); border-top: none; border-radius: 0 0 12px 12px; padding: 0 16px 20px 16px; background: rgba(255,255,255,0.015); margin-bottom: 24px; }
     
@@ -46,7 +46,7 @@ st.markdown("""
     .odds-value { font-weight: bold; color: #4ade80; font-family: 'Courier New', monospace; font-size: 1.0rem; }
     .social-bets-container { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05); }
     
-    /* Badges (Rich V7.2 Style) */
+    /* Badges */
     .bet-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; border: 1px solid rgba(255,255,255,0.05); color: #ccc; }
     .bet-badge.me { border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); color: #fff; }
     .bet-badge.ai { border: 1px solid rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.15); color: #e9d5ff; }
@@ -57,7 +57,7 @@ st.markdown("""
     .bb-res-pot { color: #fbbf24; font-weight: bold; font-family: monospace; opacity: 0.8; }
     .bb-void { color: #aaa; text-decoration: line-through; }
     
-    /* Dashboard & Admin & History (Restored V5.9.3 Styles) */
+    /* Dashboard & Stats */
     .kpi-box { text-align: center; padding: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; margin-bottom: 8px;}
     .kpi-label { font-size: 0.65rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px;}
     .kpi-val { font-size: 2rem; font-weight: 800; font-family: 'Courier New', monospace; line-height: 1; }
@@ -80,15 +80,27 @@ st.markdown("""
     .s-user { font-weight: bold; opacity: 0.9; }
     .s-amt { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; }
     
-    /* CHIP STYLES */
+    /* CHIP STYLES & UI */
     .chip-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; margin-left: 4px; }
-    .chip-boost { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
-    .chip-limit { background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.4); }
-    .chip-shield { background: rgba(168, 162, 158, 0.2); color: #d6d3d1; border: 1px solid rgba(168, 162, 158, 0.4); }
+    .chip-boost { background: rgba(251, 191, 36, 0.2); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.4); } /* Gold/Electric */
+    .chip-limit { background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); } /* Purple/Diamond */
+    .chip-shield { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.4); } /* Silver/Shield */
     
-    /* Shield Console Style */
-    .shield-row { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    .shield-stat { font-family: monospace; font-weight: bold; }
+    .chip-inventory-card {
+        background: rgba(255,255,255,0.03); 
+        border: 1px solid rgba(255,255,255,0.05); 
+        border-radius: 8px; 
+        padding: 15px; 
+        text-align: center;
+        height: 100%;
+    }
+    .chip-inv-icon { font-size: 2rem; margin-bottom: 8px; }
+    .chip-inv-name { font-weight: bold; font-size: 0.9rem; color: #fff; margin-bottom: 4px; }
+    .chip-inv-count { font-family: 'Courier New', monospace; font-size: 1.5rem; font-weight: 800; color: #fbbf24; }
+    .chip-inv-desc { font-size: 0.7rem; opacity: 0.6; margin-top: 8px; line-height: 1.3; }
+    .chip-action-hint { font-size: 0.7rem; color: #4ade80; margin-top: 4px; font-weight: bold; }
+
+    /* Shield Console */
     .shield-locked { color: #f87171; font-size: 0.8rem; font-weight: bold; display: flex; align-items: center; gap: 4px; }
     .shield-ready { color: #4ade80; font-size: 0.8rem; font-weight: bold; display: flex; align-items: center; gap: 4px; }
 
@@ -120,10 +132,8 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        # Updated bets for chip_used, user_chips table
         bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','payout','net','gw','placed_at','chip_used'])
         odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
-        # Updated result for bm_shield
         results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score','bm_shield'])
         bm_log = get_df_safe("bm_log", ['gw','bookmaker'])
         users = get_df_safe("users", ['username','password','role','team'])
@@ -252,7 +262,6 @@ def settle_bets_date_aware():
                 a_s = int(row['away_score'])
                 
                 # --- CHIP LOGIC: BM SHIELD ---
-                # If BM Shield is TRUE, result is VOID (Refund)
                 is_void = bool(row.get('bm_shield', False))
                 
                 outcome = "DRAW"
@@ -267,7 +276,6 @@ def settle_bets_date_aware():
                 stake = float(row['stake']) if row['stake'] else 0
                 
                 # --- CHIP LOGIC: ODDS BOOST ---
-                # If Boost used, odds + 1.0
                 base_odds = float(row['odds']) if row['odds'] else 1.0
                 chip_used = str(row.get('chip_used', '')).strip()
                 if chip_used == 'BOOST':
@@ -542,6 +550,19 @@ def main():
     me = st.session_state['user']
     role = st.session_state.get('role', 'user')
     
+    # --- AUTO-INIT CHIPS IF EMPTY ---
+    # Check if this user has any chips. If not, give default 2 each.
+    if user_chips.empty or user_chips[user_chips['user_name'] == me].empty:
+        # Give Starter Pack
+        init_chips = [
+            {"user_name": me, "chip_type": "BOOST", "amount": 2},
+            {"user_name": me, "chip_type": "LIMIT", "amount": 2},
+            {"user_name": me, "chip_type": "SHIELD", "amount": 2}
+        ]
+        supabase.table("user_chips").upsert(init_chips).execute()
+        # Reload to reflect immediately
+        user_chips = fetch_all_data()[-1] 
+
     target_gw = get_strict_target_gw(results, target_season)
     check_and_assign_bm(target_gw, bm_log, users)
     
@@ -587,7 +608,7 @@ def main():
         c_boost = chip_counts.get('BOOST', 0)
         c_limit = chip_counts.get('LIMIT', 0)
         c_shield = chip_counts.get('SHIELD', 0)
-        st.sidebar.markdown(f"**Chips:** 🚀x{c_boost} 🔓x{c_limit} 🛡️x{c_shield}")
+        st.sidebar.markdown(f"**Chips:** ⚡x{c_boost} 💎x{c_limit} 🛡️x{c_shield}")
 
     if st.sidebar.button("Logout"): st.session_state['user'] = None; st.rerun()
 
@@ -644,8 +665,8 @@ def main():
                             # Chip Badge
                             c_u = str(b.get('chip_used', '')).strip()
                             c_html = ""
-                            if c_u == 'BOOST': c_html = "<span class='chip-tag chip-boost'>🚀BOOST</span>"
-                            if c_u == 'LIMIT': c_html = "<span class='chip-tag chip-limit'>🔓LIMIT</span>"
+                            if c_u == 'BOOST': c_html = "<span class='chip-tag chip-boost'>⚡BOOST</span>"
+                            if c_u == 'LIMIT': c_html = "<span class='chip-tag chip-limit'>💎LIMIT</span>"
                             
                             pnl_span = ""
                             db_res = str(b.get('result', '')).strip().upper()
@@ -677,23 +698,23 @@ def main():
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
                             
-                            # --- V8.5 CHIP SELECTOR (Redesigned) ---
+                            # --- V8.5 CHIP SELECTOR (Japanese UI) ---
                             # Check inventory
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
                             
-                            # Build options (Japanese Simple)
+                            # Build options (Clean)
                             chip_opts = ["利用しない (None)"]
-                            if inv.get('BOOST', 0) > 0: chip_opts.append("🚀 ODDS BOOST (+1.0倍)")
-                            if inv.get('LIMIT', 0) > 0: chip_opts.append("🔓 LIMIT BREAKER (上限解放)")
+                            if inv.get('BOOST', 0) > 0: chip_opts.append("⚡ ODDS BOOST")
+                            if inv.get('LIMIT', 0) > 0: chip_opts.append("💎 LIMIT BREAKER")
                             
                             sel_chip_str = st.radio("チップを使用しますか？", chip_opts, horizontal=True, key=f"chp_{mid}", label_visibility="collapsed")
                             
-                            # Tech Spec Display
+                            # Tech Spec Display (Clean)
                             if "BOOST" in sel_chip_str:
                                 st.caption("⚡ **効果:** オッズ+1.0倍 / **コスト:** 1枚")
                             elif "LIMIT" in sel_chip_str:
-                                st.caption("⚡ **効果:** このGWの予算上限を20,000円にする / **コスト:** 1枚")
+                                st.caption("💎 **効果:** 上限2万円に解放 / **コスト:** 1枚")
 
                             # Logic for budget check
                             temp_limit = budget_limit
@@ -784,8 +805,8 @@ def main():
                         # Chip Icon
                         c_u = str(b.get('chip_used', '')).strip()
                         c_icon = ""
-                        if c_u == 'BOOST': c_icon = "🚀"
-                        if c_u == 'LIMIT': c_icon = "🔓"
+                        if c_u == 'BOOST': c_icon = "⚡"
+                        if c_u == 'LIMIT': c_icon = "💎"
                         
                         if db_res in ['WIN', 'LOSE']:
                             sign = "+" if db_net > 0 else ""
@@ -882,8 +903,8 @@ def main():
                 # Chip Icon
                 c_u = str(b.get('chip_used', '')).strip()
                 c_icon = ""
-                if c_u == 'BOOST': c_icon = "🚀"
-                if c_u == 'LIMIT': c_icon = "🔓"
+                if c_u == 'BOOST': c_icon = "⚡"
+                if c_u == 'LIMIT': c_icon = "💎"
 
                 match_name = f"{b['home']} vs {b['away']}" if pd.notna(b['home']) else b.get('match', 'Unknown')
                 st.markdown(f"""<div class="hist-card {cls}"><div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace"><span>{b['user']} | {b['gw']}</span><span style="color:{col}; font-weight:bold;">{pnl}</span></div><div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div><div style="font-size:0.8rem; opacity:0.8"><span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> <span style="opacity:0.6">(@{b['odds']}){c_icon}</span><span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span></div></div>""", unsafe_allow_html=True)
@@ -1040,48 +1061,71 @@ def main():
                         supabase.table("bm_log").upsert({"gw": t_gw, "bookmaker": t_u}).execute()
                         st.success("Assigned"); time.sleep(1); st.rerun()
 
-    # --- TAB 6: CHIPS (V8.5 REDESIGNED) ---
+    # --- TAB 6: CHIPS (V8.5 REDESIGNED UI) ---
     with t6:
         st.markdown("### 💎 ARMORY (チップ管理)")
         
-        # 1. Inventory (Professional UI)
+        # 1. Inventory (Cards UI)
         st.markdown("#### 🎒 所持チップ一覧")
+        st.caption("※BOOSTとLIMITは「MATCHES」タブのベット画面で使用します。")
+        
         if not user_chips.empty:
             my_chips = user_chips[user_chips['user_name'] == me]
             if not my_chips.empty:
-                cols = st.columns(3)
                 inv_map = {r['chip_type']: r['amount'] for _, r in my_chips.iterrows()}
                 
-                with cols[0]:
-                    st.metric("🚀 ODDS BOOST", f"x{inv_map.get('BOOST', 0)}")
-                    st.caption("効果: オッズ+1.0倍")
-                with cols[1]:
-                    st.metric("🔓 LIMIT BREAKER", f"x{inv_map.get('LIMIT', 0)}")
-                    st.caption("効果: 予算上限20,000円")
-                with cols[2]:
-                    st.metric("🛡️ BM SHIELD", f"x{inv_map.get('SHIELD', 0)}")
-                    st.caption("効果: 試合無効化 (BM専用)")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.markdown(f"""
+                    <div class="chip-inventory-card">
+                        <div class="chip-inv-icon">⚡</div>
+                        <div class="chip-inv-name">ODDS BOOST</div>
+                        <div class="chip-inv-count">x{inv_map.get('BOOST', 0)}</div>
+                        <div class="chip-inv-desc">オッズを+1.0倍にする。<br>勝負所で利益を最大化。</div>
+                        <div class="chip-action-hint">➜ MATCHESタブで使用</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with c2:
+                    st.markdown(f"""
+                    <div class="chip-inventory-card">
+                        <div class="chip-inv-icon">💎</div>
+                        <div class="chip-inv-name">LIMIT BREAKER</div>
+                        <div class="chip-inv-count">x{inv_map.get('LIMIT', 0)}</div>
+                        <div class="chip-inv-desc">このGWの予算上限を<br>20,000円まで解放する。</div>
+                        <div class="chip-action-hint">➜ MATCHESタブで使用</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with c3:
+                    st.markdown(f"""
+                    <div class="chip-inventory-card">
+                        <div class="chip-inv-icon">🛡️</div>
+                        <div class="chip-inv-name">BM SHIELD</div>
+                        <div class="chip-inv-count">x{inv_map.get('SHIELD', 0)}</div>
+                        <div class="chip-inv-desc">自分がBMの試合を<br>無効試合（返金）にする。</div>
+                        <div class="chip-action-hint">➜ 下記コンソールで使用</div>
+                    </div>
+                    """, unsafe_allow_html=True)
             else:
-                st.info("No chips found.")
+                st.info("チップデータがありません。")
+        else:
+            st.info("チップデータ読み込み中...")
         
-        # 2. Public Intel (New Feature)
         st.divider()
-        st.markdown("#### 🌍 参加者のチップ保有状況")
+
+        # 2. Public Intel (New Feature)
+        st.markdown("#### 🌍 全員のチップ保有状況")
         if not user_chips.empty:
-            # Pivot table to show Users x Chips
             pivot_chips = user_chips.pivot(index='user_name', columns='chip_type', values='amount').fillna(0).astype(int)
-            # Ensure all columns exist
             for c in ['BOOST', 'LIMIT', 'SHIELD']:
                 if c not in pivot_chips.columns: pivot_chips[c] = 0
             
-            # Display as a clean table
             st.dataframe(
                 pivot_chips[['BOOST', 'LIMIT', 'SHIELD']], 
                 use_container_width=True, 
                 column_config={
-                    "BOOST": st.column_config.NumberColumn("🚀 Boost", format="x%d"),
-                    "LIMIT": st.column_config.NumberColumn("🔓 Limit", format="x%d"),
-                    "SHIELD": st.column_config.NumberColumn("🛡️ Shield", format="x%d"),
+                    "BOOST": st.column_config.NumberColumn("⚡ Boost", format="%d"),
+                    "LIMIT": st.column_config.NumberColumn("💎 Limit", format="%d"),
+                    "SHIELD": st.column_config.NumberColumn("🛡️ Shield", format="%d"),
                 }
             )
 
@@ -1114,11 +1158,15 @@ def main():
                     candidates['dt_jst'] = candidates['utc_kickoff'].apply(to_jst)
                     candidates = candidates.sort_values('dt_jst', ascending=False)
                     
-                    st.caption(f"直近の担当GW (GW{latest_gw_num}) の対象試合を表示しています。")
+                    st.caption(f"直近の担当GW (GW{latest_gw_num}) の対象試合のみ表示しています。")
                     
                     for _, m in candidates.iterrows():
                         mid = m['match_id']
                         m_name = f"{m['home']} vs {m['away']}"
+                        
+                        # Score formatting Fix
+                        h_s = int(m['home_score']) if pd.notna(m['home_score']) else 0
+                        a_s = int(m['away_score']) if pd.notna(m['away_score']) else 0
                         
                         m_bets = bets[bets['match_id'] == mid]
                         chips_used_in_match = 0
@@ -1127,13 +1175,13 @@ def main():
                         
                         is_dirty = (chips_used_in_match > 0)
                         
-                        with st.expander(f"{m['gw']}: {m_name} ({m['home_score']}-{m['away_score']})", expanded=True):
+                        with st.expander(f"{m['gw']}: {m_name} ({h_s}-{a_s})", expanded=True):
                             c1, c2, c3 = st.columns([2, 2, 1])
                             
                             with c1:
-                                st.markdown(f"**試合結果:** {m['home_score']} - {m['away_score']}")
+                                st.markdown(f"**試合結果:** {h_s} - {a_s}")
                                 if is_dirty:
-                                    st.markdown("<div class='shield-locked'>🔴 ロック中 (チップ使用あり)</div>", unsafe_allow_html=True)
+                                    st.markdown("<div class='shield-locked'>🔴 ロック中 (他者がチップ使用済)</div>", unsafe_allow_html=True)
                                 else:
                                     st.markdown("<div class='shield-ready'>🟢 発動可能 (Ready)</div>", unsafe_allow_html=True)
 
@@ -1142,7 +1190,7 @@ def main():
                                 if not user_chips.empty:
                                     u_row = user_chips[(user_chips['user_name'] == me) & (user_chips['chip_type'] == 'SHIELD')]
                                     if not u_row.empty: shield_count = int(u_row.iloc[0]['amount'])
-                                st.caption(f"シールド残数: {shield_count}")
+                                st.caption(f"あなたのシールド残数: {shield_count}")
                                 
                             with c3:
                                 if is_dirty:
@@ -1156,11 +1204,11 @@ def main():
                                         settle_bets_date_aware()
                                         st.success("シールド発動！試合を無効化しました。"); time.sleep(1.5); st.rerun()
                 else:
-                    st.info("直近のGWに対象試合はありません。")
+                    st.info(f"直近の担当GW (GW{latest_gw_num}) に、発動可能な試合はありません。")
             else:
-                st.info("現在、シールド発動可能な試合はありません。")
+                st.info("現在、シールド発動可能な試合（終了済み・未使用）はありません。")
         else:
-             st.caption("BM担当履歴がありません。")
+             st.caption("まだBMを担当した履歴がない、または終了した試合がありません。")
 
 if __name__ == "__main__":
     main()
