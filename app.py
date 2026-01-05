@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import requests
@@ -768,7 +769,7 @@ def main():
             
             st.write("---")
             st.markdown("#### ODDS EDITOR (Manual)")
-            with st.expander("📝 Update Odds", expanded=True):
+            with st.expander("📝 Update Odds", expanded=False):
                 if not results.empty:
                     matches = results[results['gw'] == target_gw].copy()
                     if not matches.empty:
@@ -788,6 +789,57 @@ def main():
                         if st.button("SAVE ODDS", use_container_width=True):
                             supabase.table("odds").upsert({"match_id": int(sel_m_id), "home_win": new_h, "draw": new_d, "away_win": new_a}).execute()
                             st.success("Updated"); time.sleep(1); st.rerun()
+            
+            # --- V8.4 NEW: RESULT OVERRIDE ---
+            st.markdown("#### 👑 RESULT OVERRIDE (Emergency)")
+            with st.expander("🚨 Manual Score/Status Fix", expanded=False):
+                st.info("Use this ONLY when API data is stuck. It will overwrite the database and trigger settlement.")
+                if not results.empty:
+                    # 1. Select GW
+                    all_gws = sorted(results['gw'].unique(), key=lambda x: int(re.sub(r'\D', '', str(x)) or 0))
+                    # Default to last one
+                    def_gw_idx = len(all_gws) - 1 if all_gws else 0
+                    sel_gw_ovr = st.selectbox("Select GW", all_gws, index=def_gw_idx, key="ovr_gw_sel")
+                    
+                    # 2. Select Match
+                    gw_matches = results[results['gw'] == sel_gw_ovr].copy()
+                    match_map = {f"{r['home']} vs {r['away']}": r for _, r in gw_matches.iterrows()}
+                    sel_match_name = st.selectbox("Select Match", list(match_map.keys()), key="ovr_match_sel")
+                    
+                    if sel_match_name:
+                        target_m = match_map[sel_match_name]
+                        curr_status = target_m['status']
+                        curr_h = int(target_m['home_score']) if pd.notna(target_m['home_score']) else 0
+                        curr_a = int(target_m['away_score']) if pd.notna(target_m['away_score']) else 0
+                        
+                        c1, c2, c3 = st.columns(3)
+                        # Status Selector
+                        st_opts = ['FINISHED', 'IN_PLAY', 'SCHEDULED', 'POSTPONED']
+                        st_idx = st_opts.index(curr_status) if curr_status in st_opts else 0
+                        new_status = c1.selectbox("Status", st_opts, index=st_idx, key="ovr_status")
+                        
+                        # Score Selector (Dropdown 0-10)
+                        score_opts = list(range(11))
+                        h_idx = curr_h if curr_h <= 10 else 0
+                        a_idx = curr_a if curr_a <= 10 else 0
+                        new_h = c2.selectbox("Home Score", score_opts, index=h_idx, key="ovr_h")
+                        new_a = c3.selectbox("Away Score", score_opts, index=a_idx, key="ovr_a")
+                        
+                        if st.button("FORCE UPDATE & SETTLE", type="primary", use_container_width=True):
+                            # Update Result Table
+                            supabase.table("result").update({
+                                "status": new_status,
+                                "home_score": new_h,
+                                "away_score": new_a,
+                                "updated_at": datetime.datetime.now().isoformat()
+                            }).eq("match_id", target_m['match_id']).execute()
+                            
+                            # Trigger Settlement
+                            count, msg = settle_bets_date_aware()
+                            st.success(f"Updated Match & Settled {count} Bets! ({msg})")
+                            time.sleep(1.5)
+                            st.rerun()
+
             with st.expander("👑 BM Manual Override"):
                  with st.form("bm_manual"):
                     t_gw = st.selectbox("GW", sorted(results['gw'].unique()) if not results.empty else ["GW1"])
