@@ -682,18 +682,18 @@ def main():
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
                             
-                            # Build options (Simple Tech Specs)
-                            chip_opts = ["None"]
-                            if inv.get('BOOST', 0) > 0: chip_opts.append("🚀 ODDS BOOST")
-                            if inv.get('LIMIT', 0) > 0: chip_opts.append("🔓 LIMIT BREAKER")
+                            # Build options (Japanese Simple)
+                            chip_opts = ["利用しない (None)"]
+                            if inv.get('BOOST', 0) > 0: chip_opts.append("🚀 ODDS BOOST (+1.0倍)")
+                            if inv.get('LIMIT', 0) > 0: chip_opts.append("🔓 LIMIT BREAKER (上限解放)")
                             
-                            sel_chip_str = st.radio("Use Chip?", chip_opts, horizontal=True, key=f"chp_{mid}", label_visibility="collapsed")
+                            sel_chip_str = st.radio("チップを使用しますか？", chip_opts, horizontal=True, key=f"chp_{mid}", label_visibility="collapsed")
                             
-                            # Tech Spec Display (No Childish Text)
+                            # Tech Spec Display
                             if "BOOST" in sel_chip_str:
-                                st.caption("**Effect:** Odds +1.0 / **Cost:** 1 Chip")
+                                st.caption("⚡ **効果:** オッズ+1.0倍 / **コスト:** 1枚")
                             elif "LIMIT" in sel_chip_str:
-                                st.caption("**Effect:** GW Budget Limit → ¥20,000 / **Cost:** 1 Chip")
+                                st.caption("⚡ **効果:** このGWの予算上限を20,000円にする / **コスト:** 1枚")
 
                             # Logic for budget check
                             temp_limit = budget_limit
@@ -703,7 +703,7 @@ def main():
                             over_budget = new_total > temp_limit
                             
                             if c_b.form_submit_button("BET", use_container_width=True):
-                                if over_budget: st.error(f"Over Budget! Limit: ¥{temp_limit:,}")
+                                if over_budget: st.error(f"予算オーバーです！ 上限: ¥{temp_limit:,}")
                                 else:
                                     to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
                                     
@@ -718,7 +718,7 @@ def main():
                                         if curr_amt > 0:
                                             supabase.table("user_chips").update({"amount": curr_amt - 1}).match({"user_name": me, "chip_type": final_chip}).execute()
                                         else:
-                                            st.error("Not enough chips!"); st.stop()
+                                            st.error("チップが足りません！"); st.stop()
                                     
                                     pl = {
                                         "key": f"{m['gw']}:{me}:{mid}", "gw": m['gw'], "user": me, 
@@ -1042,10 +1042,10 @@ def main():
 
     # --- TAB 6: CHIPS (V8.5 REDESIGNED) ---
     with t6:
-        st.markdown("### 💎 ARMORY")
+        st.markdown("### 💎 ARMORY (チップ管理)")
         
         # 1. Inventory (Professional UI)
-        st.markdown("#### 🎒 INVENTORY")
+        st.markdown("#### 🎒 所持チップ一覧")
         if not user_chips.empty:
             my_chips = user_chips[user_chips['user_name'] == me]
             if not my_chips.empty:
@@ -1054,91 +1054,113 @@ def main():
                 
                 with cols[0]:
                     st.metric("🚀 ODDS BOOST", f"x{inv_map.get('BOOST', 0)}")
-                    st.caption("Effect: +1.0 Odds")
+                    st.caption("効果: オッズ+1.0倍")
                 with cols[1]:
                     st.metric("🔓 LIMIT BREAKER", f"x{inv_map.get('LIMIT', 0)}")
-                    st.caption("Effect: Limit 20k")
+                    st.caption("効果: 予算上限20,000円")
                 with cols[2]:
                     st.metric("🛡️ BM SHIELD", f"x{inv_map.get('SHIELD', 0)}")
-                    st.caption("Effect: Void Match")
+                    st.caption("効果: 試合無効化 (BM専用)")
             else:
                 st.info("No chips found.")
         
+        # 2. Public Intel (New Feature)
+        st.divider()
+        st.markdown("#### 🌍 参加者のチップ保有状況")
+        if not user_chips.empty:
+            # Pivot table to show Users x Chips
+            pivot_chips = user_chips.pivot(index='user_name', columns='chip_type', values='amount').fillna(0).astype(int)
+            # Ensure all columns exist
+            for c in ['BOOST', 'LIMIT', 'SHIELD']:
+                if c not in pivot_chips.columns: pivot_chips[c] = 0
+            
+            # Display as a clean table
+            st.dataframe(
+                pivot_chips[['BOOST', 'LIMIT', 'SHIELD']], 
+                use_container_width=True, 
+                column_config={
+                    "BOOST": st.column_config.NumberColumn("🚀 Boost", format="x%d"),
+                    "LIMIT": st.column_config.NumberColumn("🔓 Limit", format="x%d"),
+                    "SHIELD": st.column_config.NumberColumn("🛡️ Shield", format="x%d"),
+                }
+            )
+
         st.divider()
 
-        # 2. BM SHIELD CONSOLE (Clean UI)
-        st.markdown("#### 🛡️ SHIELD CONSOLE")
+        # 3. BM SHIELD CONSOLE (Limited to Latest GW)
+        st.markdown("#### 🛡️ シールド発動コンソール (BM専用)")
         
-        # Get my BM GWs
         my_bm_gws = []
         if not bm_log.empty:
             my_bm_gws = bm_log[bm_log['bookmaker'] == me]['gw'].tolist()
         
         if my_bm_gws and not results.empty:
-            # Filter results
-            candidates = results[
+            # 1. First, find ALL potential matches
+            candidates_all = results[
                 (results['gw'].isin(my_bm_gws)) & 
                 (results['status'] == 'FINISHED') & 
                 ((results['bm_shield'] == False) | (pd.isna(results['bm_shield'])))
             ].copy()
-            
-            if not candidates.empty:
-                candidates['dt_jst'] = candidates['utc_kickoff'].apply(to_jst)
-                candidates = candidates.sort_values('dt_jst', ascending=False)
-                
-                found_candidate = False
-                for _, m in candidates.iterrows():
-                    mid = m['match_id']
-                    m_name = f"{m['home']} vs {m['away']}"
-                    
-                    # Check if ANY chip used in this match (BUG FIX HERE)
-                    m_bets = bets[bets['match_id'] == mid]
-                    chips_used_in_match = 0 # Initialize as 0
-                    if not m_bets.empty:
-                         chips_used_in_match = m_bets[m_bets['chip_used'] != ""].shape[0]
-                    
-                    is_dirty = (chips_used_in_match > 0)
-                    
-                    with st.expander(f"{m['gw']}: {m_name} ({m['home_score']}-{m['away_score']})", expanded=True):
-                        # Row Layout
-                        c1, c2, c3 = st.columns([2, 2, 1])
-                        
-                        with c1:
-                            st.markdown(f"**Match Status:** Finished")
-                            if is_dirty:
-                                st.markdown("<div class='shield-locked'>🔴 LOCKED (Chips Active)</div>", unsafe_allow_html=True)
-                            else:
-                                st.markdown("<div class='shield-ready'>🟢 READY TO VOID</div>", unsafe_allow_html=True)
 
-                        with c2:
-                            # Check Shield Inventory
-                            shield_count = 0
-                            if not user_chips.empty:
-                                u_row = user_chips[(user_chips['user_name'] == me) & (user_chips['chip_type'] == 'SHIELD')]
-                                if not u_row.empty: shield_count = int(u_row.iloc[0]['amount'])
-                            st.caption(f"Your Shields: {shield_count}")
-                            
-                        with c3:
-                            if is_dirty:
-                                st.button("🔒", key=f"sh_lk_{mid}", disabled=True)
-                            elif shield_count <= 0:
-                                st.button("🚫", key=f"sh_nc_{mid}", disabled=True)
-                            else:
-                                if st.button("🛡️ VOID", key=f"sh_act_{mid}", type="primary", use_container_width=True):
-                                    # 1. Update Result
-                                    supabase.table("result").update({"bm_shield": True}).eq("match_id", mid).execute()
-                                    # 2. Decrement Chip
-                                    supabase.table("user_chips").update({"amount": shield_count - 1}).match({"user_name": me, "chip_type": "SHIELD"}).execute()
-                                    # 3. Settle
-                                    settle_bets_date_aware()
-                                    st.success("MATCH VOIDED"); time.sleep(1.5); st.rerun()
-                    found_candidate = True
+            if not candidates_all.empty:
+                # 2. Extract GW numbers and find the MAX (Latest)
+                candidates_all['gw_num'] = candidates_all['gw'].apply(extract_gw_num)
+                latest_gw_num = candidates_all['gw_num'].max()
                 
-                if not found_candidate: st.caption("No eligible matches found.")
+                # 3. Filter to keep only matches from the Latest GW
+                candidates = candidates_all[candidates_all['gw_num'] == latest_gw_num].copy()
+                
+                if not candidates.empty:
+                    candidates['dt_jst'] = candidates['utc_kickoff'].apply(to_jst)
+                    candidates = candidates.sort_values('dt_jst', ascending=False)
+                    
+                    st.caption(f"直近の担当GW (GW{latest_gw_num}) の対象試合を表示しています。")
+                    
+                    for _, m in candidates.iterrows():
+                        mid = m['match_id']
+                        m_name = f"{m['home']} vs {m['away']}"
+                        
+                        m_bets = bets[bets['match_id'] == mid]
+                        chips_used_in_match = 0
+                        if not m_bets.empty:
+                             chips_used_in_match = m_bets[m_bets['chip_used'] != ""].shape[0]
+                        
+                        is_dirty = (chips_used_in_match > 0)
+                        
+                        with st.expander(f"{m['gw']}: {m_name} ({m['home_score']}-{m['away_score']})", expanded=True):
+                            c1, c2, c3 = st.columns([2, 2, 1])
+                            
+                            with c1:
+                                st.markdown(f"**試合結果:** {m['home_score']} - {m['away_score']}")
+                                if is_dirty:
+                                    st.markdown("<div class='shield-locked'>🔴 ロック中 (チップ使用あり)</div>", unsafe_allow_html=True)
+                                else:
+                                    st.markdown("<div class='shield-ready'>🟢 発動可能 (Ready)</div>", unsafe_allow_html=True)
+
+                            with c2:
+                                shield_count = 0
+                                if not user_chips.empty:
+                                    u_row = user_chips[(user_chips['user_name'] == me) & (user_chips['chip_type'] == 'SHIELD')]
+                                    if not u_row.empty: shield_count = int(u_row.iloc[0]['amount'])
+                                st.caption(f"シールド残数: {shield_count}")
+                                
+                            with c3:
+                                if is_dirty:
+                                    st.button("🔒", key=f"sh_lk_{mid}", disabled=True)
+                                elif shield_count <= 0:
+                                    st.button("🚫", key=f"sh_nc_{mid}", disabled=True)
+                                else:
+                                    if st.button("無効試合にする", key=f"sh_act_{mid}", type="primary", use_container_width=True):
+                                        supabase.table("result").update({"bm_shield": True}).eq("match_id", mid).execute()
+                                        supabase.table("user_chips").update({"amount": shield_count - 1}).match({"user_name": me, "chip_type": "SHIELD"}).execute()
+                                        settle_bets_date_aware()
+                                        st.success("シールド発動！試合を無効化しました。"); time.sleep(1.5); st.rerun()
+                else:
+                    st.info("直近のGWに対象試合はありません。")
             else:
-                st.caption("No finished matches found where you are BM.")
+                st.info("現在、シールド発動可能な試合はありません。")
         else:
-             st.caption("You haven't been a BM yet.")
+             st.caption("BM担当履歴がありません。")
 
 if __name__ == "__main__":
     main()
