@@ -13,9 +13,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (V8.8 Final Polish)
+# 0. System Configuration & CSS (V8.9 Final Polish)
 # ==============================================================================
-st.set_page_config(page_title="Football App V8.8", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V8.9", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -89,23 +89,11 @@ st.markdown("""
     /* Section Headers */
     .section-header { font-family: 'Courier New', monospace; font-weight: 800; font-size: 1.1rem; margin-top: 20px; margin-bottom: 12px; border-left: 4px solid #fbbf24; padding-left: 10px; text-transform: uppercase; letter-spacing: 1px; color: #fff; }
 
-    /* Inventory Cards (Responsive Fix: margin-bottom for mobile stacking) */
-    .chip-inventory-card {
-        background: rgba(255,255,255,0.03); 
-        border: 1px solid rgba(255,255,255,0.05); 
-        border-radius: 8px; 
-        padding: 16px; 
-        text-align: center;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        margin-bottom: 12px; /* Fix for mobile vertical spacing */
-    }
+    /* Inventory Cards Internal Styles */
     .chip-inv-icon { font-size: 2rem; margin-bottom: 8px; }
     .chip-inv-name { font-weight: bold; font-size: 0.85rem; color: #fff; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px;}
     .chip-inv-count { font-family: 'Courier New', monospace; font-size: 1.6rem; font-weight: 800; color: #fbbf24; margin-bottom: 8px; }
-    .chip-inv-desc { font-size: 0.75rem; opacity: 0.7; line-height: 1.4; min-height: 3.5em; text-align: left; }
+    .chip-inv-desc { font-size: 0.75rem; opacity: 0.8; line-height: 1.5; min-height: 4.5em; text-align: left; }
     
     /* Public Intel List */
     .intel-row {
@@ -720,16 +708,14 @@ def main():
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
                             
-                            # --- Chip Selector (Boost Only) ---
+                            # --- Chip Selector (Boost Only, Clean UI) ---
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
                             
-                            chip_opts = ["通常ベット (チップなし)"]
-                            if inv.get('BOOST', 0) > 0: chip_opts.append("⚡ ODDS BOOST")
+                            chip_opts = ["通常"]
+                            if inv.get('BOOST', 0) > 0: chip_opts.append("ODDS BOOST")
                             
                             sel_chip_str = st.radio("オプション", chip_opts, horizontal=True, key=f"chp_{mid}", label_visibility="collapsed")
-                            
-                            if "BOOST" in sel_chip_str: st.caption("⚡ **効果:** オッズ+1.0倍 / **コスト:** 1枚")
                             
                             new_total = current_spend - (int(my_bet.iloc[0]['stake']) if not my_bet.empty else 0) + stake
                             over_budget = new_total > budget_limit
@@ -967,27 +953,24 @@ def main():
             inv_map = {r['chip_type']: r['amount'] for _, r in my_chips.iterrows()} if not my_chips.empty else {}
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.markdown(f"""<div class="chip-inventory-card"><div class="chip-inv-icon">⚡</div><div class="chip-inv-name">ODDS BOOST</div><div class="chip-inv-count">x{inv_map.get('BOOST', 0)}</div><div class="chip-inv-desc">オッズ+1.0倍<br>一撃必殺</div></div>""", unsafe_allow_html=True)
+                with st.container(border=True):
+                    st.markdown(f"""<div class="chip-inventory-card" style="border:none;"><div class="chip-inv-icon">⚡</div><div class="chip-inv-name">ODDS BOOST</div><div class="chip-inv-count">x{inv_map.get('BOOST', 0)}</div><div class="chip-inv-desc">的中時の利益を増幅させる攻撃型チップ。オッズの低い堅実な試合で確実に稼ぐか、大穴狙いで一攫千金を狙うか、使い所が勝負を分ける。</div></div>""", unsafe_allow_html=True)
             with c2:
-                # LIMIT BREAKER CARD (Combined Action)
-                is_active = has_limit_breaker
-                btn_disabled = (inv_map.get('LIMIT', 0) <= 0) or is_active
-                btn_label = "✅ 解放中" if is_active else ("発動 (残1枚)" if not btn_disabled else "在庫なし")
-                
-                # Card HTML part
-                st.markdown(f"""<div class="chip-inventory-card"><div class="chip-inv-icon">💎</div><div class="chip-inv-name">LIMIT BREAKER</div><div class="chip-inv-count">x{inv_map.get('LIMIT', 0)}</div><div class="chip-inv-desc">予算上限20,000円<br>GW全開放</div>""", unsafe_allow_html=True)
-                
-                # Button inside the column (visually below card description)
-                if st.button(btn_label, key="limit_btn", disabled=btn_disabled, use_container_width=True):
-                    pl = {"key": f"{target_gw}:{me}:LIMIT", "gw": target_gw, "user": me, "match_id": 999999, "pick": "LIMIT_BREAKER", "stake": 0, "chip_used": "LIMIT"}
-                    supabase.table("bets").upsert(pl).execute()
-                    supabase.table("user_chips").update({"amount": inv_map.get('LIMIT') - 1}).match({"user_name": me, "chip_type": "LIMIT"}).execute()
-                    st.success("LIMIT BREAKER ACTIVATED!"); time.sleep(1.0); st.rerun()
-                
-                st.markdown("</div>", unsafe_allow_html=True) # Close card div
+                with st.container(border=True):
+                    st.markdown(f"""<div class="chip-inventory-card" style="border:none;"><div class="chip-inv-icon">💎</div><div class="chip-inv-name">LIMIT BREAKER</div><div class="chip-inv-count">x{inv_map.get('LIMIT', 0)}</div><div class="chip-inv-desc">勝負所を見極めた全ツッパ用。通常8,000円の足かせを外し、最大20,000円までベット可能にする。自信のあるGWで一気に差をつけろ。</div></div>""", unsafe_allow_html=True)
+                    # LIMIT BREAKER ACTIVATION
+                    is_active = has_limit_breaker
+                    btn_disabled = (inv_map.get('LIMIT', 0) <= 0) or is_active
+                    btn_label = "✅ 解放中" if is_active else ("発動する" if not btn_disabled else "在庫なし")
+                    if st.button(btn_label, key="limit_btn", disabled=btn_disabled, use_container_width=True):
+                        pl = {"key": f"{target_gw}:{me}:LIMIT", "gw": target_gw, "user": me, "match_id": 999999, "pick": "LIMIT_BREAKER", "stake": 0, "chip_used": "LIMIT"}
+                        supabase.table("bets").upsert(pl).execute()
+                        supabase.table("user_chips").update({"amount": inv_map.get('LIMIT') - 1}).match({"user_name": me, "chip_type": "LIMIT"}).execute()
+                        st.success("LIMIT BREAKER ACTIVATED!"); time.sleep(1.0); st.rerun()
 
             with c3:
-                st.markdown(f"""<div class="chip-inventory-card"><div class="chip-inv-icon">🛡️</div><div class="chip-inv-name">BM SHIELD</div><div class="chip-inv-count">x{inv_map.get('SHIELD', 0)}</div><div class="chip-inv-desc">試合無効化<br>BM専用</div></div>""", unsafe_allow_html=True)
+                with st.container(border=True):
+                    st.markdown(f"""<div class="chip-inventory-card" style="border:none;"><div class="chip-inv-icon">🛡️</div><div class="chip-inv-name">BM SHIELD</div><div class="chip-inv-count">x{inv_map.get('SHIELD', 0)}</div><div class="chip-inv-desc">まさかの大波乱から身を守る保険。自分がBMを担当した試合で大負けした際、その試合を無効化（ノーゲーム）にし、損失を帳消しにする。</div></div>""", unsafe_allow_html=True)
         
         # 2. Public Intel List
         st.markdown("<div class='section-header'>全員のチップ保有状況</div>", unsafe_allow_html=True)
@@ -1012,21 +995,14 @@ def main():
         my_bm_gws = bm_log[bm_log['bookmaker'] == me]['gw'].tolist() if not bm_log.empty else []
         
         if my_bm_gws and not results.empty:
-            # First, find LATEST assigned GW
-            all_bm_matches = results[results['gw'].isin(my_bm_gws)].copy()
-            if not all_bm_matches.empty:
-                all_bm_matches['gw_num'] = all_bm_matches['gw'].apply(extract_gw_num)
-                latest_gw_num = all_bm_matches['gw_num'].max()
-                
-                # Filter matches ONLY from Latest GW
-                candidates = all_bm_matches[all_bm_matches['gw_num'] == latest_gw_num].copy()
-                # Further filter: Finished AND Not Shielded Yet (or Shielded to show status)
-                # Actually show ALL finished matches of that GW so BM can see status
-                candidates = candidates[candidates['status'] == 'FINISHED'].copy()
+            candidates_all = results[(results['gw'].isin(my_bm_gws)) & (results['status'] == 'FINISHED') & ((results['bm_shield'] == False) | (pd.isna(results['bm_shield'])))].copy()
+            if not candidates_all.empty:
+                candidates_all['gw_num'] = candidates_all['gw'].apply(extract_gw_num)
+                latest_gw_num = candidates_all['gw_num'].max()
+                candidates = candidates_all[candidates_all['gw_num'] == latest_gw_num].copy()
                 
                 if not candidates.empty:
                     candidates['dt_jst'] = candidates['utc_kickoff'].apply(to_jst)
-                    # Next GW Deadline Logic
                     next_gw_str = f"GW{latest_gw_num + 1}"
                     next_matches = results[results['gw'] == next_gw_str]
                     deadline = None
@@ -1041,11 +1017,8 @@ def main():
 
                     for _, m in candidates.iterrows():
                         mid = m['match_id']
-                        # Dirty Check
                         m_bets = bets[bets['match_id'] == mid]
                         chips_used = m_bets[m_bets['chip_used'] != ""].shape[0] if not m_bets.empty else 0
-                        
-                        # Calc BM PnL
                         bm_pnl = 0
                         if not m_bets.empty:
                             valid_bets = m_bets[m_bets['result'].isin(['WIN', 'LOSE'])]
