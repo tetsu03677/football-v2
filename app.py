@@ -13,9 +13,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (V10.1 Fix: GW21 Split)
+# 0. System Configuration & CSS (V10.2 Integrity Patch)
 # ==============================================================================
-st.set_page_config(page_title="Football App V10.1", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V10.2", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -151,7 +151,6 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        # Bets table includes dummy bets for Limit Breaker (match_id=999999)
         bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','payout','net','gw','placed_at','chip_used'])
         odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
         results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score','bm_shield'])
@@ -251,6 +250,7 @@ def settle_bets_date_aware():
         r_res = supabase.table("result").select("*").execute()
         o_res = supabase.table("odds").select("*").execute()
         u_res = supabase.table("users").select("username").execute()
+        bm_res = supabase.table("bm_log").select("*").execute()
         
         if not b_res.data or not r_res.data: return 0, "No data"
         
@@ -258,9 +258,14 @@ def settle_bets_date_aware():
         df_r = pd.DataFrame(r_res.data)
         df_o = pd.DataFrame(o_res.data) if o_res.data else pd.DataFrame(columns=['match_id','home_win','draw','away_win'])
         
+        bm_map = {}
+        if bm_res.data:
+            for item in bm_res.data:
+                bm_map[item['gw']] = item['bookmaker']
+        
         # Clean IDs
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
-        df_b = df_b[df_b['match_id'] != '999999'] # Exclude dummy
+        df_b = df_b[df_b['match_id'] != '999999'] 
         
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         df_r['dt_jst'] = df_r['utc_kickoff'].apply(to_jst)
@@ -268,7 +273,6 @@ def settle_bets_date_aware():
         
         if 'bm_shield' not in df_r.columns: df_r['bm_shield'] = False
         
-        # Scope: Past matches (Recent)
         current_gw = 38
         now = datetime.datetime.now(JST)
         past_matches = df_r[df_r['dt_jst'] < now].sort_values('dt_jst', ascending=False)
@@ -277,8 +281,7 @@ def settle_bets_date_aware():
         
         df_r_scoped = df_r[df_r['gw_num'].isin(target_gws)].copy()
         
-        # --- V10.1 FIX: APPLY NEW RULES (AUTO-BET & ODDS UPDATE) ONLY FROM GW21 ---
-        # 1. Auto Bet for Missed Matches (GW21+)
+        # --- V10.2: Auto Bet (Only GW21+ AND Exclude BM) ---
         finished_matches = df_r_scoped[(df_r_scoped['status'] == 'FINISHED') & (df_r_scoped['gw_num'] >= 21)]
         
         new_auto_bets = []
@@ -286,10 +289,13 @@ def settle_bets_date_aware():
             all_users = [u['username'] for u in u_res.data]
             for _, m in finished_matches.iterrows():
                 mid = str(m['match_id'])
+                match_bm = bm_map.get(m['gw'])
                 bets_in_match = df_b[df_b['match_id'] == mid]['user'].unique().tolist()
+                
                 for u in all_users:
+                    if u == match_bm: continue # V10.2 FIX: Do not auto-bet for the BM
+                    
                     if u not in bets_in_match:
-                        # Fetch current odds for HOME
                         o_row = df_o[df_o['match_id'] == int(mid)]
                         def_odd = 1.0
                         if not o_row.empty: def_odd = float(o_row.iloc[0]['home_win'])
@@ -305,13 +311,11 @@ def settle_bets_date_aware():
         if new_auto_bets:
             for i in range(0, len(new_auto_bets), 50):
                 supabase.table("bets").upsert(new_auto_bets[i:i+50]).execute()
-            # Refetch
             b_res = supabase.table("bets").select("*").execute()
             df_b = pd.DataFrame(b_res.data)
             df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
             df_b = df_b[df_b['match_id'] != '999999']
 
-        # --- SETTLEMENT LOOP ---
         df_r_scoped = df_r_scoped.rename(columns={'status': 'match_status'})
         merged = pd.merge(df_b, df_r_scoped[['match_id', 'match_status', 'home_score', 'away_score', 'gw_num', 'bm_shield']], on='match_id', how='inner')
         
@@ -322,20 +326,13 @@ def settle_bets_date_aware():
                 h_s = int(row['home_score'])
                 a_s = int(row['away_score'])
                 is_void = bool(row.get('bm_shield', False))
-                
                 outcome = "DRAW"
                 if h_s > a_s: outcome = "HOME"
                 elif a_s > h_s: outcome = "AWAY"
-                
                 bet_pick = str(row['pick']).strip().upper()
                 final_res = 'WIN' if bet_pick == outcome else 'LOSE'
                 if is_void: final_res = 'VOID'
-                
                 stake = float(row['stake']) if row['stake'] else 0
-                
-                # --- V10.1: ODDS LOGIC ---
-                # GW20 or older: Use stored odds (Do NOT update)
-                # GW21+: Use Closing Odds from Odds Table
                 
                 if row['gw_num'] >= 21:
                     mid_int = int(row['match_id'])
@@ -346,14 +343,11 @@ def settle_bets_date_aware():
                         elif bet_pick == 'DRAW': base_odds = float(o_row.iloc[0]['draw'])
                         elif bet_pick == 'AWAY': base_odds = float(o_row.iloc[0]['away_win'])
                 else:
-                    # Legacy: Use stored odds
                     base_odds = float(row['odds']) if row['odds'] else 1.0
 
-                # Apply Boost
                 chip_used = str(row.get('chip_used', '')).strip()
                 if chip_used == 'BOOST': base_odds += 1.0
                 
-                # Payout Calc
                 if final_res == 'WIN':
                     payout = int(stake * base_odds)
                     net = int(payout - stake)
@@ -368,14 +362,12 @@ def settle_bets_date_aware():
                 curr_net = float(row.get('net', 0)) if pd.notna(row.get('net')) else 0
                 curr_stored_odds = float(row['odds']) if row['odds'] else 0
                 
-                # Update condition: Result changed OR Net changed OR (GW21+ AND Odds Diff)
                 odds_diff = abs(curr_stored_odds - base_odds) > 0.01
                 should_update_odds = (row['gw_num'] >= 21) and odds_diff
                 
                 if (curr_res != final_res) or (int(curr_net) != net) or should_update_odds:
                     upd_payload = {"result": final_res, "payout": payout, "net": net}
                     if should_update_odds: upd_payload["odds"] = base_odds
-                    
                     supabase.table("bets").update(upd_payload).eq("key", row['key']).execute()
                     updates_count += 1
                     
@@ -419,6 +411,13 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
     for _, b in merged.iterrows():
         user = b['user']
         if user not in stats: continue
+        
+        gw_key = f"GW{''.join([c for c in str(b['gw']) if c.isdigit()])}"
+        bm = bm_map.get(gw_key)
+        
+        # V10.2 FIX: IGNORE BM'S OWN BETS FROM CALCULATION
+        if bm and user == bm: continue
+
         db_res = str(b.get('result', '')).strip().upper()
         db_net = float(b['net']) if pd.notna(b['net']) and str(b['net']).strip() != '' else 0
         stake = float(b['stake']) if b['stake'] else 0
@@ -426,14 +425,11 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
         raw_odds = float(b['odds']) if b['odds'] else 1.0
         if str(b.get('chip_used', '')) == 'BOOST': raw_odds += 1.0
 
-        gw_key = f"GW{''.join([c for c in str(b['gw']) if c.isdigit()])}"
-        bm = bm_map.get(gw_key)
-        
         if db_res in ['WIN', 'LOSE', 'VOID']:
             stats[user]['total'] += 1
             stats[user]['balance'] += int(db_net)
             if db_res == 'WIN': stats[user]['wins'] += 1
-            if db_res != 'VOID' and bm and bm in stats and bm != user: 
+            if db_res != 'VOID' and bm and bm in stats: 
                 stats[bm]['balance'] -= int(db_net)
         else:
             stats[user]['potential'] += int((stake * raw_odds) - stake)
@@ -476,6 +472,10 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
         for _, b in gw_bets.iterrows():
             user = b['user']
             if user not in base_stats: continue
+            
+            # V10.2 FIX: IGNORE BM'S OWN BETS
+            if current_bm and user == current_bm: continue
+
             db_res = str(b.get('result', '')).strip().upper()
             db_net = float(b['net']) if pd.notna(b['net']) and str(b['net']).strip() != '' else 0
             stake = float(b['stake'])
@@ -504,12 +504,12 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
                     is_inplay = True
             
             gw_total_pnl[user] += int(pnl)
-            if not is_shielded and current_bm and current_bm in gw_total_pnl and current_bm != user:
+            if not is_shielded and current_bm and current_bm in gw_total_pnl:
                 gw_total_pnl[current_bm] -= int(pnl)
             
             if is_inplay and not is_shielded:
                 inplay_sim_only[user] += int(pnl)
-                if current_bm and current_bm in inplay_sim_only and current_bm != user:
+                if current_bm and current_bm in inplay_sim_only:
                     inplay_sim_only[current_bm] -= int(pnl)
     live_data = []
     for u, s in base_stats.items():
