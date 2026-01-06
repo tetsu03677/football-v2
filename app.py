@@ -13,9 +13,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (V9.2 No Combo)
+# 0. System Configuration & CSS (V10.0 Auto-Bet & Closing Odds)
 # ==============================================================================
-st.set_page_config(page_title="Football App V9.2", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V10.0", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -151,7 +151,6 @@ def fetch_all_data():
             except:
                 return pd.DataFrame(columns=expected_cols)
 
-        # Bets table includes dummy bets for Limit Breaker (match_id=999999)
         bets = get_df_safe("bets", ['key','user','match_id','pick','stake','odds','result','payout','net','gw','placed_at','chip_used'])
         odds = get_df_safe("odds", ['match_id','home_win','draw','away_win'])
         results = get_df_safe("result", ['match_id','gw','home','away','utc_kickoff','status','home_score','away_score','bm_shield'])
@@ -247,30 +246,84 @@ def is_match_locked(kickoff_iso, lock_minutes):
 
 def settle_bets_date_aware():
     try:
+        # V10.0: Fetch all data fresh
         b_res = supabase.table("bets").select("*").execute()
         r_res = supabase.table("result").select("*").execute()
+        o_res = supabase.table("odds").select("*").execute()
+        u_res = supabase.table("users").select("username").execute()
+        
         if not b_res.data or not r_res.data: return 0, "No data"
+        
         df_b = pd.DataFrame(b_res.data)
         df_r = pd.DataFrame(r_res.data)
-        # Filter out Limit Breaker dummy bets (match_id=999999)
+        df_o = pd.DataFrame(o_res.data) if o_res.data else pd.DataFrame(columns=['match_id','home_win','draw','away_win'])
+        
+        # Clean IDs
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
-        df_b = df_b[df_b['match_id'] != '999999'] 
+        df_b = df_b[df_b['match_id'] != '999999'] # Exclude dummy
         
         df_r['match_id'] = pd.to_numeric(df_r['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
         df_r['dt_jst'] = df_r['utc_kickoff'].apply(to_jst)
         df_r['gw_num'] = df_r['gw'].apply(extract_gw_num)
         
         if 'bm_shield' not in df_r.columns: df_r['bm_shield'] = False
-        if 'chip_used' not in df_b.columns: df_b['chip_used'] = ""
         
+        # --- V10.0 NEW: AUTO BET FOR MISSED MATCHES ---
+        # 1. Identify finished matches in scope
+        current_gw = 38
         now = datetime.datetime.now(JST)
         past_matches = df_r[df_r['dt_jst'] < now].sort_values('dt_jst', ascending=False)
-        current_gw = 38 
         if not past_matches.empty: current_gw = past_matches.iloc[0]['gw_num']
         target_gws = range(current_gw - 10, current_gw + 2)
+        
+        # Scoped finished matches
         df_r_scoped = df_r[df_r['gw_num'].isin(target_gws)].copy()
+        finished_matches = df_r_scoped[df_r_scoped['status'] == 'FINISHED']
+        
+        new_auto_bets = []
+        if not finished_matches.empty and u_res.data:
+            all_users = [u['username'] for u in u_res.data]
+            
+            for _, m in finished_matches.iterrows():
+                mid = str(m['match_id'])
+                # Check bets for this match
+                bets_in_match = df_b[df_b['match_id'] == mid]['user'].unique().tolist()
+                
+                # Find users who missed
+                for u in all_users:
+                    if u not in bets_in_match:
+                        # Fetch current odds for HOME (default bet)
+                        o_row = df_o[df_o['match_id'] == int(mid)]
+                        def_odd = 1.0
+                        if not o_row.empty: def_odd = float(o_row.iloc[0]['home_win'])
+                        
+                        # Create Auto Bet
+                        bet_data = {
+                            "key": f"{m['gw']}:{u}:{mid}", "gw": m['gw'], "user": u, 
+                            "match_id": int(mid), "match": f"{m['home']} vs {m['away']}", 
+                            "pick": "HOME", "stake": 100, "odds": def_odd, 
+                            "placed_at": datetime.datetime.now(JST).isoformat(), 
+                            "status": "AUTO", "result": "", "payout": 0, "net": 0, "chip_used": None
+                        }
+                        new_auto_bets.append(bet_data)
+        
+        # Batch Insert Auto Bets
+        if new_auto_bets:
+            # Upsert to avoid duplicates if re-run
+            for i in range(0, len(new_auto_bets), 50):
+                supabase.table("bets").upsert(new_auto_bets[i:i+50]).execute()
+            
+            # Re-fetch bets to include new ones
+            b_res = supabase.table("bets").select("*").execute()
+            df_b = pd.DataFrame(b_res.data)
+            df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
+            df_b = df_b[df_b['match_id'] != '999999']
+
+        # --- SETTLEMENT LOGIC (V10.0: Use Odds Table for Closing Line) ---
         df_r_scoped = df_r_scoped.rename(columns={'status': 'match_status'})
+        # Merge Matches + Bets
         merged = pd.merge(df_b, df_r_scoped[['match_id', 'match_status', 'home_score', 'away_score', 'gw_num', 'bm_shield']], on='match_id', how='inner')
+        
         updates_count = 0
         for _, row in merged.iterrows():
             m_status = str(row.get('match_status', '')).strip().upper()
@@ -278,18 +331,32 @@ def settle_bets_date_aware():
                 h_s = int(row['home_score'])
                 a_s = int(row['away_score'])
                 is_void = bool(row.get('bm_shield', False))
+                
                 outcome = "DRAW"
                 if h_s > a_s: outcome = "HOME"
                 elif a_s > h_s: outcome = "AWAY"
+                
                 bet_pick = str(row['pick']).strip().upper()
                 final_res = 'WIN' if bet_pick == outcome else 'LOSE'
                 if is_void: final_res = 'VOID'
+                
                 stake = float(row['stake']) if row['stake'] else 0
                 
-                base_odds = float(row['odds']) if row['odds'] else 1.0
+                # --- V10.0: FETCH CLOSING ODDS FROM ODDS TABLE ---
+                mid_int = int(row['match_id'])
+                o_row = df_o[df_o['match_id'] == mid_int]
+                
+                base_odds = 1.0
+                if not o_row.empty:
+                    if bet_pick == 'HOME': base_odds = float(o_row.iloc[0]['home_win'])
+                    elif bet_pick == 'DRAW': base_odds = float(o_row.iloc[0]['draw'])
+                    elif bet_pick == 'AWAY': base_odds = float(o_row.iloc[0]['away_win'])
+                
+                # Apply Boost
                 chip_used = str(row.get('chip_used', '')).strip()
                 if chip_used == 'BOOST': base_odds += 1.0
                 
+                # Calculate Payout
                 if final_res == 'WIN':
                     payout = int(stake * base_odds)
                     net = int(payout - stake)
@@ -302,10 +369,20 @@ def settle_bets_date_aware():
                 
                 curr_res = str(row.get('result', '')).strip().upper()
                 curr_net = float(row.get('net', 0)) if pd.notna(row.get('net')) else 0
+                # Also check if we need to update the odds stored in bets table to match closing line
+                curr_stored_odds = float(row['odds']) if row['odds'] else 0
                 
-                if curr_res != final_res or int(curr_net) != net:
-                    supabase.table("bets").update({"result": final_res, "payout": payout, "net": net}).eq("key", row['key']).execute()
+                needs_update = (curr_res != final_res) or (int(curr_net) != net) or (abs(curr_stored_odds - base_odds) > 0.01)
+                
+                if needs_update:
+                    supabase.table("bets").update({
+                        "result": final_res, 
+                        "payout": payout, 
+                        "net": net,
+                        "odds": base_odds # Update to closing odds
+                    }).eq("key", row['key']).execute()
                     updates_count += 1
+                    
         return updates_count, f"GW {min(target_gws)} to {max(target_gws)}"
     except Exception as e:
         print(f"Settlement Error: {e}")
@@ -351,7 +428,9 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
         stake = float(b['stake']) if b['stake'] else 0
         
         raw_odds = float(b['odds']) if b['odds'] else 1.0
-        if str(b.get('chip_used', '')) == 'BOOST': raw_odds += 1.0
+        # If pending, apply boost for potential check (settled bets already have boosted odds in db)
+        if db_res not in ['WIN', 'LOSE', 'VOID'] and str(b.get('chip_used', '')) == 'BOOST': 
+            raw_odds += 1.0
 
         gw_key = f"GW{''.join([c for c in str(b['gw']) if c.isdigit()])}"
         bm = bm_map.get(gw_key)
@@ -407,8 +486,11 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
             db_net = float(b['net']) if pd.notna(b['net']) and str(b['net']).strip() != '' else 0
             stake = float(b['stake'])
             
+            # Use stored odds (if settled) or current odds (if live)
             c_odds = float(b['odds'])
-            if str(b.get('chip_used', '')) == 'BOOST': c_odds += 1.0
+            # Live simulation: Apply boost visually if not settled
+            if db_res not in ['WIN', 'LOSE', 'VOID'] and str(b.get('chip_used', '')) == 'BOOST': 
+                c_odds += 1.0
 
             pot_win = (stake * c_odds) - stake
             dream_profit[user] += int(pot_win)
@@ -583,14 +665,13 @@ def main():
     # --- BUDGET LOGIC (LIMIT BREAKER AWARE) ---
     base_budget = get_config_value(config, "max_total_stake_per_gw", 8000)
     
-    # Check Limit Breaker status via dummy bets
+    # Check Limit Breaker status
     my_gw_bets = pd.DataFrame()
     active_breakers = []
     if not bets.empty:
         lb_bets = bets[(bets['gw'] == target_gw) & (bets['chip_used'] == 'LIMIT') & (bets['match_id'] == '999999')]
         if not lb_bets.empty:
             active_breakers = lb_bets['user'].unique().tolist()
-        
         my_gw_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw) & (bets['match_id'] != '999999')]
     
     has_limit_breaker = (me in active_breakers)
@@ -703,17 +784,13 @@ def main():
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
                             
-                            # --- Chip Selector (Boost Only, Clean UI with Undo Logic) ---
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
-                            
                             current_chip_used = str(my_bet.iloc[0]['chip_used']).strip() if not my_bet.empty else ""
                             
-                            # LOGIC CHANGE: COMBO PREVENTION
-                            # If Limit Breaker active, Boost option is hidden or disabled.
                             if has_limit_breaker:
                                 chip_opts = ["通常"]
-                                if current_chip_used == 'BOOST': chip_opts.append("ODDS BOOST (Active)") # Should allow undo
+                                if current_chip_used == 'BOOST': chip_opts.append("ODDS BOOST (Active)") 
                             else:
                                 chip_opts = ["通常"]
                                 if inv.get('BOOST', 0) > 0 or current_chip_used == 'BOOST': chip_opts.append("ODDS BOOST")
@@ -737,21 +814,15 @@ def main():
                                     to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
                                     final_chip = "BOOST" if "BOOST" in sel_chip_str else ""
                                     
-                                    # --- UNDO / CONSUME LOGIC ---
-                                    # 1. Boost -> Normal (Refund)
                                     if current_chip_used == 'BOOST' and final_chip == "":
                                         supabase.table("user_chips").update({"amount": inv.get('BOOST', 0) + 1}).match({"user_name": me, "chip_type": "BOOST"}).execute()
                                         st.toast("Boost Removed. Chip Refunded.")
-                                    
-                                    # 2. Normal -> Boost (Consume)
                                     elif current_chip_used == "" and final_chip == 'BOOST':
                                         curr_amt = inv.get('BOOST', 0)
                                         if curr_amt > 0:
                                             supabase.table("user_chips").update({"amount": curr_amt - 1}).match({"user_name": me, "chip_type": "BOOST"}).execute()
                                         else:
                                             st.error("チップが足りません！"); st.stop()
-                                    
-                                    # 3. Boost -> Boost / Normal -> Normal (No change)
                                     
                                     pl = {
                                         "key": f"{m['gw']}:{me}:{mid}", "gw": m['gw'], "user": me, 
@@ -766,7 +837,7 @@ def main():
             else: st.info(f"No matches for {target_gw}")
         else: st.info("Loading...")
 
-    # --- TAB 2,3,4,5 SAME AS BEFORE ---
+    # --- TAB 2: LIVE ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH & SMART SETTLE", use_container_width=True): 
@@ -837,12 +908,20 @@ def main():
                     stake_str = "<div style='display:flex; flex-direction:column; align-items:flex-end; font-size:0.75rem; gap:2px;'>" + "".join(badges_html) + "</div>"
                 st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05);"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><div style='display:flex; align-items:center'>{sts_disp}</div>{stake_str}</div></div>""", unsafe_allow_html=True)
 
+    # --- TAB 3: HISTORY (V10.0 Updated Defaults) ---
     with t3:
         if not bets.empty:
             c1, c2 = st.columns(2)
             all_gws = sorted(list(bets['gw'].unique()), key=lambda x: int("".join([c for c in str(x) if c.isdigit()] or 0)), reverse=True)
-            sel_u = c1.selectbox("User", ["All"] + list(users['username'].unique()))
-            sel_g = c2.selectbox("GW", ["All"] + all_gws)
+            users_list = sorted(list(users['username'].unique()))
+            
+            # Default Index Logic
+            def_u_idx = 0
+            if me in users_list: def_u_idx = users_list.index(me) + 1 # +1 because of "All"
+            
+            sel_u = c1.selectbox("User", ["All"] + users_list, index=def_u_idx)
+            sel_g = c2.selectbox("GW", ["All"] + all_gws, index=1 if len(all_gws)>0 else 0) # Default to latest GW (Index 1)
+            
             hist = bets[bets['match_id'] != '999999'].copy()
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
@@ -1004,7 +1083,7 @@ def main():
                     else:
                         if inv_map.get('LIMIT', 0) > 0:
                             if st.button("発動する", use_container_width=True):
-                                # LOGIC CHANGE: COMBO PREVENTION (Check if Boost used in this GW)
+                                # LOGIC CHANGE: COMBO PREVENTION
                                 already_boosted = False
                                 if not bets.empty:
                                     boost_bets = bets[(bets['user'] == me) & (bets['gw'] == target_gw) & (bets['chip_used'] == 'BOOST')]
