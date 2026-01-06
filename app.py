@@ -13,9 +13,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (V10.3 Self-Healing Patch)
+# 0. System Configuration & CSS (V10.4 BM History Support)
 # ==============================================================================
-st.set_page_config(page_title="Football App V10.3", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V10.4", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -71,6 +71,10 @@ st.markdown("""
     .h-win { border-left-color: #4ade80; }
     .h-lose { border-left-color: #f87171; }
     .h-void { border-left-color: #aaa; }
+    
+    /* BM History Card Special Style */
+    .h-bm { border-left-color: #fbbf24 !important; background: rgba(251, 191, 36, 0.05) !important; }
+    
     .summary-box { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; }
     .summary-title { font-size: 0.8rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
     .summary-val { font-size: 2.2rem; font-weight: 800; font-family: 'Courier New', monospace; }
@@ -262,7 +266,6 @@ def settle_bets_date_aware():
         bm_map = {}
         if bm_res.data:
             for item in bm_res.data:
-                # Normalize GW key
                 k = str(item['gw']).strip().upper()
                 bm_map[k] = item['bookmaker']
         
@@ -276,9 +279,9 @@ def settle_bets_date_aware():
         
         if 'bm_shield' not in df_r.columns: df_r['bm_shield'] = False
         
-        # --- V10.3 CLEANUP: REMOVE BAD BETS (Self-Healing) ---
-        # 1. Bets where User == BM
+        # --- V10.3 CLEANUP (Self-Healing) ---
         bad_keys = []
+        # 1. Bets where User == BM
         for idx, row in df_b.iterrows():
             g_key = str(row['gw']).strip().upper()
             bm_user = bm_map.get(g_key)
@@ -286,11 +289,7 @@ def settle_bets_date_aware():
                 bad_keys.append(row['key'])
         
         # 2. Bets where Status=AUTO and GW < 21
-        # Need to know which match belongs to which GW num. 
-        # Merging is expensive, let's do it simply by checking logic in DB deletion if possible, 
-        # or map match_id to gw_num here.
         m_id_to_gw = dict(zip(df_r['match_id'], df_r['gw_num']))
-        
         for idx, row in df_b.iterrows():
             if str(row.get('status','')) == 'AUTO':
                 mid = str(row['match_id'])
@@ -298,20 +297,18 @@ def settle_bets_date_aware():
                 if gn < 21:
                     bad_keys.append(row['key'])
         
-        # EXECUTE DELETE
         if bad_keys:
-            bad_keys = list(set(bad_keys)) # unique
+            bad_keys = list(set(bad_keys)) 
             for i in range(0, len(bad_keys), 50):
                 batch = bad_keys[i:i+50]
                 supabase.table("bets").delete().in_("key", batch).execute()
             
-            # Reload bets after cleanup
             b_res = supabase.table("bets").select("*").execute()
             df_b = pd.DataFrame(b_res.data)
             df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
             df_b = df_b[df_b['match_id'] != '999999']
 
-        # --- AUTO BET LOGIC (Only GW21+ AND Exclude BM) ---
+        # --- AUTO BET (Only GW21+ AND Exclude BM) ---
         current_gw = 38
         now = datetime.datetime.now(JST)
         past_matches = df_r[df_r['dt_jst'] < now].sort_values('dt_jst', ascending=False)
@@ -455,7 +452,7 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
         gw_key = f"GW{''.join([c for c in str(b['gw']) if c.isdigit()])}"
         bm = bm_map.get(gw_key)
         
-        # IGNORE BM'S OWN BETS FROM CALCULATION (Safety)
+        # V10.2: Ignore BM own bets (Safety)
         if bm and user == bm: continue
 
         db_res = str(b.get('result', '')).strip().upper()
@@ -513,7 +510,6 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
             user = b['user']
             if user not in base_stats: continue
             
-            # IGNORE BM'S OWN BETS
             if current_bm and user == current_bm: continue
 
             db_res = str(b.get('result', '')).strip().upper()
@@ -815,10 +811,8 @@ def main():
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
                             
-                            # --- Chip Selector ---
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
-                            
                             current_chip_used = str(my_bet.iloc[0]['chip_used']).strip() if not my_bet.empty else ""
                             
                             if has_limit_breaker:
@@ -847,7 +841,6 @@ def main():
                                     to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
                                     final_chip = "BOOST" if "BOOST" in sel_chip_str else ""
                                     
-                                    # --- UNDO / CONSUME LOGIC ---
                                     if current_chip_used == 'BOOST' and final_chip == "":
                                         supabase.table("user_chips").update({"amount": inv.get('BOOST', 0) + 1}).match({"user_name": me, "chip_type": "BOOST"}).execute()
                                         st.toast("Boost Removed. Chip Refunded.")
@@ -871,7 +864,7 @@ def main():
             else: st.info(f"No matches for {target_gw}")
         else: st.info("Loading...")
 
-    # --- TAB 2,3,4,5,6 SAME AS BEFORE ---
+    # --- TAB 2: LIVE ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH & SMART SETTLE", use_container_width=True): 
@@ -942,41 +935,111 @@ def main():
                     stake_str = "<div style='display:flex; flex-direction:column; align-items:flex-end; font-size:0.75rem; gap:2px;'>" + "".join(badges_html) + "</div>"
                 st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05);"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><div style='display:flex; align-items:center'>{sts_disp}</div>{stake_str}</div></div>""", unsafe_allow_html=True)
 
+    # --- TAB 3: HISTORY (V10.4 BM Record Support) ---
     with t3:
         if not bets.empty:
             c1, c2 = st.columns(2)
             all_gws = sorted(list(bets['gw'].unique()), key=lambda x: int("".join([c for c in str(x) if c.isdigit()] or 0)), reverse=True)
             users_list = sorted(list(users['username'].unique()))
             
-            # Default Index Logic (Me, Latest GW)
             def_u_idx = 0
             if me in users_list: def_u_idx = users_list.index(me) + 1 
-            
             sel_u = c1.selectbox("User", ["All"] + users_list, index=def_u_idx)
             sel_g = c2.selectbox("GW", ["All"] + all_gws, index=1 if len(all_gws)>0 else 0) 
             
+            # 1. Prepare Base History (Player Bets)
             hist = bets[bets['match_id'] != '999999'].copy()
+            
+            # 2. V10.4: Inject BM History
+            # We need to calculate BM PnL for each GW where the user was BM.
+            bm_rows = []
+            if not bm_log.empty:
+                # Group bets by GW to calculate total Net
+                gw_net_sum = hist.groupby('gw')['net'].sum()
+                gw_stake_sum = hist.groupby('gw')['stake'].sum()
+                
+                for _, bm_r in bm_log.iterrows():
+                    # For each BM record, create a synthetic bet history
+                    target_gw = bm_r['gw']
+                    target_user = bm_r['bookmaker']
+                    
+                    # Calculate Inverse of Sum
+                    gw_pnl = gw_net_sum.get(target_gw, 0) * -1
+                    gw_handle = gw_stake_sum.get(target_gw, 0)
+                    
+                    # Create row (matches bets structure)
+                    # Use a special match_id to identify
+                    bm_rows.append({
+                        'key': f"BM_RECORD_{target_gw}",
+                        'user': target_user,
+                        'match_id': 'BM_DUTY',
+                        'match': f"👑 BOOKMAKER DUTY ({target_gw})",
+                        'gw': target_gw,
+                        'pick': 'HOUSE',
+                        'stake': gw_handle, # Show total handle
+                        'odds': '1.0',
+                        'result': 'WIN' if gw_pnl >= 0 else 'LOSE',
+                        'net': gw_pnl,
+                        'placed_at': datetime.datetime.now(JST).isoformat(), # Placeholder
+                        'chip_used': '',
+                        'status': 'FINISHED'
+                    })
+            
+            if bm_rows:
+                bm_df = pd.DataFrame(bm_rows)
+                hist = pd.concat([hist, bm_df], ignore_index=True)
+
+            # 3. Apply Filters
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
+            
             results_safe = results.rename(columns={'status': 'match_status'})
+            # Merge match info ONLY for real bets (BM rows have match_id='BM_DUTY')
             hist = pd.merge(hist, results_safe[['match_id', 'home', 'away', 'match_status']], on='match_id', how='left')
-            hist['dt_jst'] = hist['placed_at'].apply(to_jst)
-            hist = hist.sort_values('dt_jst', ascending=False)
+            
+            # Sort
+            # Fill NaNs for sorting
+            hist['placed_at'] = hist['placed_at'].fillna('')
+            hist = hist.sort_values('placed_at', ascending=False)
+            
             if not hist.empty:
                 total_net = hist['net'].sum()
                 col_str = "#4ade80" if total_net >= 0 else "#f87171"
                 st.markdown(f"""<div class="summary-box"><div class="summary-title">{sel_u} / {sel_g}</div><div class="summary-val" style="color:{col_str}">¥{int(total_net):,}</div></div>""", unsafe_allow_html=True)
             st.markdown("---") 
+            
             for _, b in hist.iterrows():
-                db_res = str(b.get('result', '')).strip().upper()
-                if db_res not in ['WIN', 'LOSE', 'VOID']: db_res = 'PENDING'
-                db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
-                cls = "h-win" if db_res == 'WIN' else ("h-lose" if db_res == 'LOSE' else "")
-                pnl = f"+¥{int(db_net):,}" if db_res == 'WIN' else (f"-¥{int(abs(db_net)):,}" if db_res == 'LOSE' else "REFUND")
-                c_u = str(b.get('chip_used', '')).strip()
-                c_icon = "⚡" if c_u == 'BOOST' else ""
-                match_name = f"{b['home']} vs {b['away']}" if pd.notna(b['home']) else b.get('match', 'Unknown')
-                st.markdown(f"""<div class="hist-card {cls}"><div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace"><span>{b['user']} | {b['gw']}</span><span style="font-weight:bold;">{pnl}</span></div><div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div><div style="font-size:0.8rem; opacity:0.8"><span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> <span style="opacity:0.6">(@{b['odds']}){c_icon}</span><span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span></div></div>""", unsafe_allow_html=True)
+                # Render Logic
+                if b['match_id'] == 'BM_DUTY':
+                    # Special BM Card
+                    pnl = b['net']
+                    cls = "h-win h-bm" if pnl >= 0 else "h-lose h-bm"
+                    pnl_txt = f"+¥{int(pnl):,}" if pnl >= 0 else f"-¥{int(abs(pnl)) :,}"
+                    
+                    st.markdown(f"""
+                    <div class="hist-card {cls}">
+                        <div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.8; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace; font-weight:bold;">
+                            <span>{b['user']} | {b['gw']} (BM)</span>
+                            <span>{pnl_txt}</span>
+                        </div>
+                        <div style="font-weight:800; font-size:0.95rem; margin-bottom:4px; color:#fff;">{b['match']}</div>
+                        <div style="font-size:0.8rem; opacity:0.8">
+                            <span style="opacity:0.7">TOTAL HANDLE: </span><span style="font-family:monospace">¥{int(b['stake']):,}</span>
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+                
+                else:
+                    # Normal Bet Card
+                    db_res = str(b.get('result', '')).strip().upper()
+                    if db_res not in ['WIN', 'LOSE', 'VOID']: db_res = 'PENDING'
+                    db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
+                    cls = "h-win" if db_res == 'WIN' else ("h-lose" if db_res == 'LOSE' else "")
+                    pnl = f"+¥{int(db_net):,}" if db_res == 'WIN' else (f"-¥{int(abs(db_net)):,}" if db_res == 'LOSE' else "REFUND")
+                    c_u = str(b.get('chip_used', '')).strip()
+                    c_icon = "⚡" if c_u == 'BOOST' else ""
+                    match_name = f"{b['home']} vs {b['away']}" if pd.notna(b['home']) else b.get('match', 'Unknown')
+                    
+                    st.markdown(f"""<div class="hist-card {cls}"><div style="display:flex; justify-content:space-between; font-size:0.75rem; opacity:0.6; margin-bottom:4px; text-transform:uppercase; font-family:'Courier New', monospace"><span>{b['user']} | {b['gw']}</span><span style="font-weight:bold;">{pnl}</span></div><div style="font-weight:bold; font-size:0.95rem; margin-bottom:4px">{match_name}</div><div style="font-size:0.8rem; opacity:0.8"><span style="color:#a5b4fc; font-weight:bold">{b['pick']}</span> <span style="opacity:0.6">(@{b['odds']}){c_icon}</span><span style="margin-left:8px; font-family:monospace">¥{int(b['stake']):,}</span></div></div>""", unsafe_allow_html=True)
         else: st.info("No history.")
 
     with t4:
