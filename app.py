@@ -13,9 +13,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (V10.2 Integrity Patch)
+# 0. System Configuration & CSS (V10.3 Self-Healing Patch)
 # ==============================================================================
-st.set_page_config(page_title="Football App V10.2", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V10.3", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -258,10 +258,13 @@ def settle_bets_date_aware():
         df_r = pd.DataFrame(r_res.data)
         df_o = pd.DataFrame(o_res.data) if o_res.data else pd.DataFrame(columns=['match_id','home_win','draw','away_win'])
         
+        # Build BM Map
         bm_map = {}
         if bm_res.data:
             for item in bm_res.data:
-                bm_map[item['gw']] = item['bookmaker']
+                # Normalize GW key
+                k = str(item['gw']).strip().upper()
+                bm_map[k] = item['bookmaker']
         
         # Clean IDs
         df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
@@ -273,6 +276,42 @@ def settle_bets_date_aware():
         
         if 'bm_shield' not in df_r.columns: df_r['bm_shield'] = False
         
+        # --- V10.3 CLEANUP: REMOVE BAD BETS (Self-Healing) ---
+        # 1. Bets where User == BM
+        bad_keys = []
+        for idx, row in df_b.iterrows():
+            g_key = str(row['gw']).strip().upper()
+            bm_user = bm_map.get(g_key)
+            if bm_user and row['user'] == bm_user:
+                bad_keys.append(row['key'])
+        
+        # 2. Bets where Status=AUTO and GW < 21
+        # Need to know which match belongs to which GW num. 
+        # Merging is expensive, let's do it simply by checking logic in DB deletion if possible, 
+        # or map match_id to gw_num here.
+        m_id_to_gw = dict(zip(df_r['match_id'], df_r['gw_num']))
+        
+        for idx, row in df_b.iterrows():
+            if str(row.get('status','')) == 'AUTO':
+                mid = str(row['match_id'])
+                gn = m_id_to_gw.get(mid, 999)
+                if gn < 21:
+                    bad_keys.append(row['key'])
+        
+        # EXECUTE DELETE
+        if bad_keys:
+            bad_keys = list(set(bad_keys)) # unique
+            for i in range(0, len(bad_keys), 50):
+                batch = bad_keys[i:i+50]
+                supabase.table("bets").delete().in_("key", batch).execute()
+            
+            # Reload bets after cleanup
+            b_res = supabase.table("bets").select("*").execute()
+            df_b = pd.DataFrame(b_res.data)
+            df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
+            df_b = df_b[df_b['match_id'] != '999999']
+
+        # --- AUTO BET LOGIC (Only GW21+ AND Exclude BM) ---
         current_gw = 38
         now = datetime.datetime.now(JST)
         past_matches = df_r[df_r['dt_jst'] < now].sort_values('dt_jst', ascending=False)
@@ -280,8 +319,6 @@ def settle_bets_date_aware():
         target_gws = range(current_gw - 10, current_gw + 2)
         
         df_r_scoped = df_r[df_r['gw_num'].isin(target_gws)].copy()
-        
-        # --- V10.2: Auto Bet (Only GW21+ AND Exclude BM) ---
         finished_matches = df_r_scoped[(df_r_scoped['status'] == 'FINISHED') & (df_r_scoped['gw_num'] >= 21)]
         
         new_auto_bets = []
@@ -289,11 +326,12 @@ def settle_bets_date_aware():
             all_users = [u['username'] for u in u_res.data]
             for _, m in finished_matches.iterrows():
                 mid = str(m['match_id'])
-                match_bm = bm_map.get(m['gw'])
+                g_key = str(m['gw']).strip().upper()
+                match_bm = bm_map.get(g_key)
                 bets_in_match = df_b[df_b['match_id'] == mid]['user'].unique().tolist()
                 
                 for u in all_users:
-                    if u == match_bm: continue # V10.2 FIX: Do not auto-bet for the BM
+                    if u == match_bm: continue # Skip BM
                     
                     if u not in bets_in_match:
                         o_row = df_o[df_o['match_id'] == int(mid)]
@@ -316,6 +354,7 @@ def settle_bets_date_aware():
             df_b['match_id'] = pd.to_numeric(df_b['match_id'], errors='coerce').fillna(0).astype(int).astype(str)
             df_b = df_b[df_b['match_id'] != '999999']
 
+        # --- SETTLEMENT ---
         df_r_scoped = df_r_scoped.rename(columns={'status': 'match_status'})
         merged = pd.merge(df_b, df_r_scoped[['match_id', 'match_status', 'home_score', 'away_score', 'gw_num', 'bm_shield']], on='match_id', how='inner')
         
@@ -329,6 +368,7 @@ def settle_bets_date_aware():
                 outcome = "DRAW"
                 if h_s > a_s: outcome = "HOME"
                 elif a_s > h_s: outcome = "AWAY"
+                
                 bet_pick = str(row['pick']).strip().upper()
                 final_res = 'WIN' if bet_pick == outcome else 'LOSE'
                 if is_void: final_res = 'VOID'
@@ -415,7 +455,7 @@ def calculate_stats_db_only(bets_df, results_df, bm_log_df, users_df):
         gw_key = f"GW{''.join([c for c in str(b['gw']) if c.isdigit()])}"
         bm = bm_map.get(gw_key)
         
-        # V10.2 FIX: IGNORE BM'S OWN BETS FROM CALCULATION
+        # IGNORE BM'S OWN BETS FROM CALCULATION (Safety)
         if bm and user == bm: continue
 
         db_res = str(b.get('result', '')).strip().upper()
@@ -473,7 +513,7 @@ def calculate_live_leaderboard_data(bets_df, results_df, bm_map, users_df, targe
             user = b['user']
             if user not in base_stats: continue
             
-            # V10.2 FIX: IGNORE BM'S OWN BETS
+            # IGNORE BM'S OWN BETS
             if current_bm and user == current_bm: continue
 
             db_res = str(b.get('result', '')).strip().upper()
@@ -775,13 +815,12 @@ def main():
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
                             
-                            # --- Chip Selector (Boost Only, Clean UI with Undo Logic) ---
+                            # --- Chip Selector ---
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
                             
                             current_chip_used = str(my_bet.iloc[0]['chip_used']).strip() if not my_bet.empty else ""
                             
-                            # LOGIC CHANGE: COMBO PREVENTION
                             if has_limit_breaker:
                                 chip_opts = ["通常"]
                                 if current_chip_used == 'BOOST': chip_opts.append("ODDS BOOST (Active)") 
@@ -832,7 +871,7 @@ def main():
             else: st.info(f"No matches for {target_gw}")
         else: st.info("Loading...")
 
-    # --- TAB 2: LIVE ---
+    # --- TAB 2,3,4,5,6 SAME AS BEFORE ---
     with t2:
         st.markdown(f"### ⚡ LIVE: {target_gw}")
         if st.button("🔄 REFRESH & SMART SETTLE", use_container_width=True): 
@@ -1038,7 +1077,6 @@ def main():
                         supabase.table("bm_log").upsert({"gw": t_gw, "bookmaker": t_u}).execute()
                         st.success("Assigned"); time.sleep(1); st.rerun()
 
-    # --- TAB 6: CHIPS ---
     with t6:
         st.markdown("<div class='section-header'>ARMORY (チップ管理)</div>", unsafe_allow_html=True)
         if not user_chips.empty:
@@ -1066,7 +1104,6 @@ def main():
                     btn_disabled = False
                     
                     if is_active:
-                        # Logic to check if user can Undo (must not exceed 8000)
                         can_undo = (current_spend <= 8000)
                         if st.button("❌ 解除する (Undo)", disabled=not can_undo, use_container_width=True):
                             supabase.table("bets").delete().eq("key", f"{target_gw}:{me}:LIMIT").execute()
@@ -1102,7 +1139,6 @@ def main():
                         <div class="chip-inv-desc">自分がBMの試合を無効試合（返金）にする。<br>※期限: 次節開始前まで</div>
                     </div>""", unsafe_allow_html=True)
         
-        # 2. Public Intel List
         st.markdown("<div class='section-header'>全員のチップ保有状況</div>", unsafe_allow_html=True)
         if not user_chips.empty:
             all_users_list = sorted(users['username'].unique())
@@ -1120,7 +1156,6 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
 
-        # 3. Shield Console
         st.markdown("<div class='section-header'>SHIELD CONSOLE</div>", unsafe_allow_html=True)
         my_bm_gws = bm_log[bm_log['bookmaker'] == me]['gw'].tolist() if not bm_log.empty else []
         
@@ -1176,7 +1211,6 @@ def main():
 
                             with c3:
                                 if is_shielded:
-                                    # UNDO LOGIC FOR SHIELD
                                     if st.button("↩️ 解除", key=f"sh_undo_{mid}", type="secondary", use_container_width=True):
                                         supabase.table("result").update({"bm_shield": False}).eq("match_id", mid).execute()
                                         supabase.table("user_chips").update({"amount": shield_count + 1}).match({"user_name": me, "chip_type": "SHIELD"}).execute()
