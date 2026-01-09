@@ -13,9 +13,9 @@ from datetime import timedelta
 from supabase import create_client
 
 # ==============================================================================
-# 0. System Configuration & CSS (V10.5 Match-Level BM History)
+# 0. System Configuration & CSS (V10.6 Fix: Explicit Odds Display)
 # ==============================================================================
-st.set_page_config(page_title="Football App V10.5", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football App V10.6", layout="wide", page_icon="⚽")
 JST = pytz.timezone('Asia/Tokyo')
 
 st.markdown("""
@@ -811,10 +811,13 @@ def main():
                             pick = c_p.selectbox("Pick", ["HOME", "DRAW", "AWAY"], index=["HOME", "DRAW", "AWAY"].index(cur_p), label_visibility="collapsed")
                             stake = c_s.number_input("Stake", 100, 20000, cur_s, 100, label_visibility="collapsed")
                             
+                            # --- Chip Selector (Boost Only, Clean UI with Undo Logic) ---
                             my_chip_inv = user_chips[user_chips['user_name'] == me]
                             inv = {r['chip_type']: r['amount'] for _, r in my_chip_inv.iterrows()}
+                            
                             current_chip_used = str(my_bet.iloc[0]['chip_used']).strip() if not my_bet.empty else ""
                             
+                            # LOGIC CHANGE: COMBO PREVENTION
                             if has_limit_breaker:
                                 chip_opts = ["通常"]
                                 if current_chip_used == 'BOOST': chip_opts.append("ODDS BOOST (Active)") 
@@ -841,6 +844,7 @@ def main():
                                     to = oh if pick=="HOME" else (od if pick=="DRAW" else oa)
                                     final_chip = "BOOST" if "BOOST" in sel_chip_str else ""
                                     
+                                    # --- UNDO / CONSUME LOGIC ---
                                     if current_chip_used == 'BOOST' and final_chip == "":
                                         supabase.table("user_chips").update({"amount": inv.get('BOOST', 0) + 1}).match({"user_name": me, "chip_type": "BOOST"}).execute()
                                         st.toast("Boost Removed. Chip Refunded.")
@@ -907,6 +911,11 @@ def main():
                         db_net = float(b.get('net', 0)) if pd.notna(b.get('net')) else 0
                         c_u = str(b.get('chip_used', '')).strip()
                         c_icon = "⚡" if c_u == 'BOOST' else ""
+                        
+                        # V10.6 Fix: Display Effective Odds
+                        base_o = float(b['odds'])
+                        eff_o = base_o + 1.0 if c_u == 'BOOST' else base_o
+                        
                         if db_res in ['WIN', 'LOSE']:
                             sign = "+" if db_net > 0 else ""
                             pnl_col = "#4ade80" if db_net > 0 else "#f87171"
@@ -920,22 +929,18 @@ def main():
                             if h_s > a_s: curr = "HOME"
                             elif a_s > h_s: curr = "AWAY"
                             is_winning = (pick == curr)
-                            c_odds = float(b['odds'])
-                            if c_u == 'BOOST': c_odds += 1.0
-                            pot_net = (stake * c_odds) - stake if is_winning else -stake
+                            pot_net = (stake * eff_o) - stake if is_winning else -stake
                             sign = "+" if pot_net > 0 else ""
                             pnl_col = "#4ade80" if pot_net > 0 else "#f87171"
                             pnl_display = f"→ <span style='color:{pnl_col}'>{sign}¥{int(pot_net):,}</span>"
                         else:
-                            c_odds = float(b['odds'])
-                            if c_u == 'BOOST': c_odds += 1.0
-                            pot_win = (stake * c_odds) - stake
+                            pot_win = (stake * eff_o) - stake
                             pnl_display = f"→ <span style='color:#666; font-size:0.7rem'>+¥{int(pot_win):,}?</span>"
-                        badges_html.append(f"<div><span style='font-weight:bold'>{u_name}:</span> {pick} <span style='font-family:monospace; opacity:0.7'>(¥{stake:,}){c_icon}</span> {pnl_display}</div>")
+                        badges_html.append(f"<div><span style='font-weight:bold'>{u_name}:</span> {pick} <span style='font-size:0.8em; color:#bbb'>@{eff_o:.2f}</span> <span style='font-family:monospace; opacity:0.7'>(¥{stake:,}){c_icon}</span> {pnl_display}</div>")
                     stake_str = "<div style='display:flex; flex-direction:column; align-items:flex-end; font-size:0.75rem; gap:2px;'>" + "".join(badges_html) + "</div>"
                 st.markdown(f"""<div style="padding:15px; background:rgba(255,255,255,0.02); margin-bottom:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05);"><div style="display:flex; justify-content:space-between; align-items:center;"><div style="flex:1; text-align:right; font-size:0.9rem; opacity:0.8">{m['home']}</div><div style="padding:0 15px; font-weight:800; font-family:monospace; font-size:1.4rem">{int(m['home_score']) if pd.notna(m['home_score']) else 0}-{int(m['away_score']) if pd.notna(m['away_score']) else 0}</div><div style="flex:1; font-size:0.9rem; opacity:0.8">{m['away']}</div></div><div style="display:flex; justify-content:space-between; margin-top:8px; font-size:0.75rem; opacity:0.6; text-transform:uppercase"><div style='display:flex; align-items:center'>{sts_disp}</div>{stake_str}</div></div>""", unsafe_allow_html=True)
 
-    # --- TAB 3: HISTORY (V10.5 Match-Level BM History) ---
+    # --- TAB 3: HISTORY ---
     with t3:
         if not bets.empty:
             c1, c2 = st.columns(2)
@@ -947,82 +952,57 @@ def main():
             sel_u = c1.selectbox("User", ["All"] + users_list, index=def_u_idx)
             sel_g = c2.selectbox("GW", ["All"] + all_gws, index=1 if len(all_gws)>0 else 0) 
             
-            # 1. Base History
             hist = bets[bets['match_id'] != '999999'].copy()
             
-            # 2. V10.5 BM History: Per Match
             bm_rows = []
             if not bm_log.empty:
-                # Find all bets, group by Match ID
-                # Calculate PnL for each match from player bets
-                # Only if the user selected was the BM for that match's GW
-                
-                # Pre-calculate player net sums per match
                 match_net_sum = hist.groupby('match_id')['net'].sum()
                 match_stake_sum = hist.groupby('match_id')['stake'].sum()
                 
-                # Iterate through all BM logs
                 for _, bm_r in bm_log.iterrows():
                     target_gw = bm_r['gw']
                     target_bm = bm_r['bookmaker']
                     
-                    # If we are filtering by user, skip if not match
                     if sel_u != "All" and sel_u != target_bm: continue
-                    # If filtering by GW, skip
                     if sel_g != "All" and sel_g != target_gw: continue
                     
-                    # Find matches in this GW (using results df)
                     gw_matches = results[results['gw'] == target_gw]
-                    
                     for _, m in gw_matches.iterrows():
                         mid = str(m['match_id'])
-                        
-                        # Calculate BM PnL = -(Player Net Sum)
-                        # If no bets, PnL is 0
-                        p_net = match_net_sum.get(int(mid), 0) # group index is int
-                        if int(mid) not in match_net_sum.index: 
-                            # Try str key just in case
-                            p_net = match_net_sum.get(mid, 0)
+                        p_net = match_net_sum.get(mid, 0) # Try string first
+                        if p_net == 0 and int(mid) in match_net_sum.index: p_net = match_net_sum.get(int(mid), 0)
                             
                         bm_pnl = -1 * p_net
                         bm_handle = match_stake_sum.get(int(mid), 0)
                         
-                        # Only show if there was action (stake > 0) or if it's finished?
-                        # Let's show if status is FINISHED or there is handle
                         if m['status'] == 'FINISHED' or bm_handle > 0:
                             bm_rows.append({
                                 'key': f"BM_{mid}",
                                 'user': target_bm,
-                                'match_id': int(mid), # Use REAL match_id
+                                'match_id': str(mid), # Ensure String
                                 'gw': target_gw,
-                                'pick': 'HOUSE', # Marker
+                                'pick': 'HOUSE',
                                 'stake': bm_handle,
                                 'odds': '-',
                                 'result': 'WIN' if bm_pnl >= 0 else 'LOSE',
                                 'net': bm_pnl,
-                                'placed_at': m['utc_kickoff'], # Sort by KO time
+                                'placed_at': m['utc_kickoff'],
                                 'chip_used': '',
                                 'status': 'FINISHED'
                             })
 
-            # 3. Merge & Filter
             if bm_rows:
                 bm_df = pd.DataFrame(bm_rows)
-                # Ensure match_id type matches
-                bm_df['match_id'] = bm_df['match_id'].astype(str)
-                hist['match_id'] = hist['match_id'].astype(str)
+                hist['match_id'] = hist['match_id'].astype(str) # Ensure Base String
                 hist = pd.concat([hist, bm_df], ignore_index=True)
             else:
                 hist['match_id'] = hist['match_id'].astype(str)
 
-            # Apply filters again (because we might have added rows outside filter scope if not careful, though logic above handles it)
             if sel_u != "All": hist = hist[hist['user'] == sel_u]
             if sel_g != "All": hist = hist[hist['gw'] == sel_g]
             
             results_safe = results.rename(columns={'status': 'match_status'})
-            # Ensure ID match
             results_safe['match_id'] = results_safe['match_id'].astype(str)
-            
             hist = pd.merge(hist, results_safe[['match_id', 'home', 'away', 'match_status']], on='match_id', how='left')
             
             hist['placed_at'] = hist['placed_at'].fillna('')
@@ -1035,10 +1015,7 @@ def main():
             st.markdown("---") 
             
             for _, b in hist.iterrows():
-                # Render
                 is_bm_row = (b.get('pick') == 'HOUSE')
-                
-                # Common Vars
                 db_res = str(b.get('result', '')).strip().upper()
                 if db_res not in ['WIN', 'LOSE', 'VOID']: db_res = 'PENDING'
                 
